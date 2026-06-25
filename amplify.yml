@@ -13,7 +13,10 @@ applications:
       phases:
         preBuild:
           commands:
-            - npm ci
+            # `npm install` (not `npm ci`) so a checkout without a committed
+            # package-lock.json still builds. If you later commit a lock file,
+            # you can switch this back to `npm ci` for reproducible installs.
+            - npm install
         build:
           commands:
             - npm run build
