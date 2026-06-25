@@ -1,0 +1,26 @@
+# AWS Amplify build spec — monorepo form.
+#
+# The app lives in a `frontend/` subfolder, so Amplify treats this as a monorepo
+# and REQUIRES the `applications:` + `appRoot:` format.
+#
+# This file must live at the REPOSITORY ROOT (next to the frontend/ folder). In
+# the Amplify console, set "App settings → General → Build settings → App root"
+# (Monorepo) to `frontend`, or rely on appRoot below.
+version: 1
+applications:
+  - appRoot: frontend
+    frontend:
+      phases:
+        preBuild:
+          commands:
+            - npm ci
+        build:
+          commands:
+            - npm run build
+      artifacts:
+        baseDirectory: dist
+        files:
+          - '**/*'
+      cache:
+        paths:
+          - node_modules/**/*
