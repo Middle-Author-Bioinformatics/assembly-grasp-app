@@ -1,6 +1,6 @@
 import { Header } from "./components/Header";
 import { SearchView } from "./components/SearchView";
-import { HAS_BACKEND, AG_CONFIG } from "./lib/assembly-config";
+import { HAS_BACKEND } from "./lib/assembly-config";
 
 export default function App() {
   return (
@@ -26,8 +26,7 @@ export default function App() {
         <SearchView />
       </main>
       <footer className="max-w-7xl mx-auto px-6 py-8 text-[11px] text-fg-faint font-mono">
-        Reads from s3://{AG_CONFIG.bucket}/ncbi_assembly_info.tsv · © 2026 Middle
-        Author Bioinformatics · For research and educational use only.
+        © 2026 Middle Author Bioinformatics · For research and educational use only.
       </footer>
     </div>
   );

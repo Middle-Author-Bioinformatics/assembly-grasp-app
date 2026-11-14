@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import {
-  HAS_BACKEND, AG_CONFIG, classifyQuery, queryAssemblies, downloadTsv,
+  HAS_BACKEND, classifyQuery, queryAssemblies, downloadTsv,
   QueryError, type QueryResult,
 } from "../lib/assembly-config";
 import { ResultsTable } from "./ResultsTable";
@@ -65,17 +65,6 @@ export function SearchView() {
           <h1 className="mt-1 text-2xl md:text-3xl font-semibold tracking-tight">
             Grab NCBI assembly records by organism
           </h1>
-          <p className="mt-2 text-sm text-fg-muted max-w-2xl">
-            Type a <span className="font-medium text-fg">genus</span> (e.g.{" "}
-            <span className="font-mono">Drosophila</span>) or a{" "}
-            <span className="font-medium text-fg">genus + species</span> (e.g.{" "}
-            <span className="font-mono">Drosophila melanogaster</span>). A Lambda
-            streams{" "}
-            <span className="font-mono">ncbi_assembly_info.tsv</span> from{" "}
-            <span className="font-mono">{AG_CONFIG.bucket}</span>, pulls every row
-            whose <span className="font-mono">organism_name</span> matches, and
-            your browser downloads them as a TSV — no backend, no upload.
-          </p>
         </div>
       </section>
 
