@@ -1,206 +1,113 @@
-import { useMemo, useState } from "react";
-import {
-  HAS_BACKEND, classifyQuery, queryAssemblies, downloadTsv,
-  QueryError, type QueryResult,
-} from "../lib/assembly-config";
+import { useEffect, useState } from "react";
+import { HAS_BACKEND, queryAssemblies, loadSchema, downloadAll, downloadPage,
+  type AssemblyFilter, type AssemblySchema, type QueryResult, type SearchRequest } from "../lib/assembly-config";
 import { ResultsTable } from "./ResultsTable";
-import {
-  Search, Loader2, Download, AlertCircle, Dna, CheckCircle2, FileDown,
-  Database,
-} from "lucide-react";
-
-type Phase = "idle" | "searching" | "done" | "error";
-
-const EXAMPLES = ["Drosophila", "Drosophila melanogaster", "Homo sapiens", "Mus musculus"];
+import { FilterEditor } from "./FilterEditor";
+import { Search, Loader2, Download, AlertCircle, Dna } from "lucide-react";
+const EXAMPLES = ["Geobacter", "Geobacter sulfurreducens", "Drosophila melanogaster", "Homo sapiens"];
 
 export function SearchView() {
   const [query, setQuery] = useState("");
-  const [phase, setPhase] = useState<Phase>("idle");
+  const [filters, setFilters] = useState<AssemblyFilter[]>([]);
+  const [pageSize, setPageSize] = useState(50);
+  const [schema, setSchema] = useState<AssemblySchema | null>(null);
+  const [schemaError, setSchemaError] = useState("");
+  const [schemaRetry, setSchemaRetry] = useState(0);
   const [result, setResult] = useState<QueryResult | null>(null);
-  const [error, setError] = useState<{ msg: string; detail?: string } | null>(null);
-
-  const kind = useMemo(() => classifyQuery(query), [query]);
-  const canSearch =
-    HAS_BACKEND && phase !== "searching" &&
-    (kind === "genus" || kind === "species");
-
-  const hint =
-    kind === "invalid"
-      ? "Use letters only — a genus (e.g. Drosophila) or genus + species (e.g. Drosophila melanogaster)."
-      : kind === "genus"
-        ? "Genus search — all species under this genus will be returned."
-        : kind === "species"
-          ? "Species search — only rows for this exact organism (and its strains) are returned."
-          : "";
-
-  async function runSearch() {
-    if (!canSearch) return;
-    setPhase("searching");
-    setError(null);
-    setResult(null);
+  const [active, setActive] = useState<SearchRequest | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [error, setError] = useState("");
+  const [pageInput, setPageInput] = useState("1");
+  useEffect(() => {
+    if (!HAS_BACKEND) return;
+    let cancelled = false;
+    setSchemaError("");
+    loadSchema().then(s => { if (!cancelled) setSchema(s); }).catch(e => {
+      if (!cancelled) setSchemaError(e.message || String(e));
+    });
+    return () => { cancelled = true; };
+  }, [schemaRetry]);
+  const invalidFilter = filters.some(f => f.op !== "missing" && f.op !== "present" && !f.value.trim());
+  const canSearch = HAS_BACKEND && !!schema && !busy && !exporting && !invalidFilter &&
+    !!query.trim() && query.length <= 200 && !/[\t\r\n]/.test(query);
+  async function execute(search: SearchRequest) {
+    setBusy(true); setError("");
     try {
-      const r = await queryAssemblies(query);
-      setResult(r);
-      setPhase("done");
-      // Immediately download to the user's computer, per the app's purpose.
-      downloadTsv(r.tsv, r.filename);
-    } catch (e: any) {
-      if (e instanceof QueryError) {
-        setError({ msg: e.message, detail: e.detail });
-      } else {
-        setError({ msg: String(e?.message ?? e) });
-      }
-      setPhase("error");
-    }
+      const next = await queryAssemblies(search);
+      setResult(next); setActive({ ...search, dataset_id: next.dataset_id }); setPageInput(String(next.page));
+    } catch (e: any) { setError(e.message || String(e)); }
+    finally { setBusy(false); }
   }
-
-  return (
-    <div className="space-y-6 animate-fade-in">
-      {/* Hero */}
-      <section className="panel overflow-hidden bg-radial-glow">
-        <div className="px-6 py-7">
-          <div className="text-xs uppercase tracking-[0.2em] text-accent font-medium">
-            assembly metadata
-          </div>
-          <h1 className="mt-1 text-2xl md:text-3xl font-semibold tracking-tight">
-            Grab NCBI assembly records by organism
-          </h1>
+  function newSearch() {
+    if (canSearch) execute({ query: query.trim(), filters: filters.map(f => ({ ...f })), page: 1, page_size: pageSize });
+  }
+  function go(page: number) {
+    if (active && result && !busy && !exporting && Number.isInteger(page) && page >= 1 && page <= result.pages) execute({ ...active, page });
+  }
+  async function exportAll() {
+    if (!active || exporting || busy) return;
+    setExporting(true); setError("");
+    try { await downloadAll(active); } catch (e: any) { setError(e.message || String(e)); }
+    finally { setExporting(false); }
+  }
+  return <div className="space-y-6 animate-fade-in">
+    <section className="panel overflow-hidden bg-radial-glow"><div className="px-6 py-7">
+      <div className="text-xs uppercase tracking-[0.2em] text-accent font-medium">assembly metadata</div>
+      <h1 className="mt-1 text-2xl md:text-3xl font-semibold tracking-tight">Grab NCBI assembly records by organism</h1>
+    </div></section>
+    <section className="panel">
+      <div className="panel-hd flex items-center gap-2"><Dna size={14} className="text-accent" /><h2 className="text-sm font-semibold">Organism name</h2></div>
+      <div className="panel-bd space-y-4">
+        <div className="flex flex-col sm:flex-row gap-3">
+          <input aria-label="Organism name" className="field flex-1" value={query} disabled={busy || exporting}
+            onChange={e => setQuery(e.target.value)} onKeyDown={e => { if (e.key === "Enter") newSearch(); }} placeholder="e.g. Geobacter sulfurreducens" autoFocus />
+          <button type="button" className="btn-primary" disabled={!canSearch} onClick={newSearch}>
+            {busy ? <><Loader2 size={16} className="animate-spin" /> Searching…</> : <><Search size={16} /> Search &amp; view</>}
+          </button>
         </div>
-      </section>
-
-      {/* Search */}
-      <section className="panel">
-        <div className="panel-hd">
-          <div className="flex items-center gap-2">
-            <Dna size={14} className="text-accent" />
-            <div>
-              <h2 className="text-sm font-semibold">Organism name</h2>
-              <p className="text-xs text-fg-muted">
-                Matching is on the leading words of the{" "}
-                <span className="font-mono">organism_name</span> column.
-              </p>
-            </div>
-          </div>
+        <div className="flex flex-wrap items-center gap-2 text-xs"><span className="text-fg-subtle">Try:</span>
+          {EXAMPLES.map(ex => <button key={ex} disabled={busy || exporting} className="pill border-border bg-surface-2 text-fg-muted font-mono" onClick={() => setQuery(ex)}>{ex}</button>)}
         </div>
-        <div className="panel-bd space-y-4">
-          <div className="flex flex-col sm:flex-row gap-3">
-            <input
-              className="field flex-1"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter") runSearch(); }}
-              placeholder="e.g. Drosophila melanogaster"
-              autoFocus
-            />
-            <button
-              type="button"
-              onClick={runSearch}
-              disabled={!canSearch}
-              className="btn-primary">
-              {phase === "searching"
-                ? (<><Loader2 size={16} className="animate-spin" /> Searching…</>)
-                : (<><Search size={16} /> Search &amp; download</>)}
-            </button>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2 text-xs">
-            <span className="text-fg-subtle">Try:</span>
-            {EXAMPLES.map((ex) => (
-              <button
-                key={ex}
-                type="button"
-                onClick={() => setQuery(ex)}
-                className="pill border-border bg-surface-2 text-fg-muted hover:text-fg hover:border-accent/50 transition-colors font-mono">
-                {ex}
-              </button>
-            ))}
-          </div>
-
-          {hint && (
-            <p className={`text-[11px] leading-relaxed ${
-              kind === "invalid" ? "text-warn" : "text-fg-subtle"
-            }`}>
-              {hint}
-            </p>
-          )}
-
-          {!HAS_BACKEND && (
-            <div className="text-fg-subtle text-[11px] leading-relaxed">
-              Preview mode — no <code className="font-mono">VITE_AG_API_BASE</code>{" "}
-              set. Search will fail until the env var is configured in Amplify.
-            </div>
-          )}
+        <p className="text-[11px] text-fg-subtle">Enter a genus or a longer organism name. Matching uses complete words at the start of the name.</p>
+        {schema && <FilterEditor schema={schema} filters={filters} onChange={setFilters} disabled={busy || exporting} />}
+        {HAS_BACKEND && !schema && !schemaError && <p className="text-xs text-fg-muted" role="status">Loading filter columns…</p>}
+        {schemaError && <div className="text-xs text-danger" role="alert">{schemaError} <button className="btn-ghost" onClick={() => setSchemaRetry(x => x + 1)}>Retry</button></div>}
+        {!HAS_BACKEND && <p className="text-xs text-fg-muted">Preview mode — search service is not configured.</p>}
+        <label className="flex items-center gap-3 text-xs text-fg-muted">Results per page
+          <select aria-label="Results per page" className="field w-24" value={pageSize} disabled={busy || exporting} onChange={e => {
+            const size = Number(e.target.value); setPageSize(size);
+            if (active) execute({ ...active, page: 1, page_size: size });
+          }}>{[25, 50, 100].map(n => <option key={n} value={n}>{n}</option>)}</select>
+        </label>
+      </div>
+    </section>
+    {error && <section className="panel border-danger/40" role="alert"><div className="panel-bd flex gap-3 text-sm text-danger"><AlertCircle size={18} className="shrink-0" />{error}</div></section>}
+    {result && active && <section className="panel" aria-busy={busy}>
+      <div className="panel-hd flex flex-wrap items-center gap-3">
+        <div className="mr-auto"><h2 className="text-sm font-semibold" aria-live="polite">{result.total.toLocaleString()} assemblies matched</h2>
+          <p className="text-xs text-fg-muted">Results for <span className="italic">{active.query}</span> · {active.filters.length} active filter{active.filters.length === 1 ? "" : "s"}</p>
         </div>
-      </section>
-
-      {/* Error */}
-      {phase === "error" && error && (
-        <section className="panel border-danger/40">
-          <div className="panel-bd flex items-start gap-3">
-            <AlertCircle size={18} className="text-danger mt-0.5 shrink-0" />
-            <div className="min-w-0">
-              <div className="text-sm font-medium text-danger">{error.msg}</div>
-              {error.detail && (
-                <div className="text-xs text-fg-muted mt-1 leading-relaxed">
-                  {error.detail}
-                </div>
-              )}
-            </div>
-          </div>
-        </section>
-      )}
-
-      {/* Results */}
-      {phase === "done" && result && (
-        <section className="panel animate-fade-in">
-          <div className="panel-hd flex-wrap gap-3">
-            <div className="flex items-center gap-2">
-              <CheckCircle2 size={16} className="text-accent" />
-              <div>
-                <h2 className="text-sm font-semibold">
-                  {result.matchCount.toLocaleString()} assembl
-                  {result.matchCount === 1 ? "y" : "ies"} matched
-                </h2>
-                <p className="text-xs text-fg-muted">
-                  Saved as{" "}
-                  <span className="font-mono">{result.filename}</span>
-                  {result.totalRows !== null && (
-                    <> · scanned {result.totalRows.toLocaleString()} rows</>
-                  )}
-                </p>
-              </div>
-            </div>
-            <button
-              type="button"
-              onClick={() => downloadTsv(result.tsv, result.filename)}
-              className="btn-ghost ml-auto">
-              <Download size={14} /> Download again
-            </button>
-          </div>
-          <div className="panel-bd space-y-3">
-            <div className="flex items-center gap-2 text-xs text-accent">
-              <FileDown size={13} />
-              Your download started automatically.
-            </div>
-            <ResultsTable parsed={result.parsed} />
-          </div>
-        </section>
-      )}
-
-      {/* Empty-state helper */}
-      {phase === "idle" && (
-        <section className="panel">
-          <div className="panel-bd flex items-start gap-3 text-xs text-fg-muted">
-            <Database size={16} className="text-fg-subtle mt-0.5 shrink-0" />
-            <p className="leading-relaxed">
-              The result TSV preserves every column from the NCBI
-              assembly_summary table — accession, BioProject, taxid, assembly
-              level, genome size, GC%, annotation counts, FTP path, and more —
-              for just the organism you searched. Open it in Excel, pandas, or R.
-            </p>
-          </div>
-        </section>
-      )}
-    </div>
-  );
+        <button className="btn-ghost" disabled={busy || exporting || result.rows.length === 0} onClick={() => downloadPage(result, active.query)}><Download size={14} /> Download page</button>
+        <button className="btn-ghost" disabled={busy || exporting || result.total === 0} onClick={exportAll}>{exporting ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />} Download all matches</button>
+      </div>
+      <div className="panel-bd space-y-4">
+        {result.total === 0 ? <p className="text-sm text-fg-muted">No assemblies match this search and its filters.</p> : <>
+          <div className="text-xs text-fg-muted" role="status">{busy ? "Loading results…" : `Showing ${((result.page - 1) * result.page_size + 1).toLocaleString()}–${Math.min(result.page * result.page_size, result.total).toLocaleString()} of ${result.total.toLocaleString()}`}</div>
+          <ResultsTable result={result} />
+          <nav aria-label="Result pages" className="flex flex-wrap items-center gap-2 text-xs">
+            <button className="btn-ghost" disabled={busy || exporting || result.page <= 1} onClick={() => go(1)}>First</button>
+            <button className="btn-ghost" disabled={busy || exporting || result.page <= 1} onClick={() => go(result.page - 1)}>Previous</button>
+            <span>Page {result.page.toLocaleString()} of {result.pages.toLocaleString()}</span>
+            <button className="btn-ghost" disabled={busy || exporting || result.page >= result.pages} onClick={() => go(result.page + 1)}>Next</button>
+            <button className="btn-ghost" disabled={busy || exporting || result.page >= result.pages} onClick={() => go(result.pages)}>Last</button>
+            <label className="ml-auto flex items-center gap-2">Go to page <input aria-label="Go to page" className="field w-24" type="number" min={1} max={result.pages} value={pageInput}
+              disabled={busy || exporting} onChange={e => setPageInput(e.target.value)} onKeyDown={e => { if (e.key === "Enter") go(Number(pageInput)); }} /></label>
+            <button className="btn-ghost" disabled={busy || exporting || !/^\d+$/.test(pageInput) || Number(pageInput) < 1 || Number(pageInput) > result.pages} onClick={() => go(Number(pageInput))}>Go</button>
+          </nav>
+        </>}
+        <p className="text-[11px] text-fg-subtle">Downloads include every source column. Full downloads have a size limit; individual pages remain downloadable.</p>
+      </div>
+    </section>}
+  </div>;
 }
