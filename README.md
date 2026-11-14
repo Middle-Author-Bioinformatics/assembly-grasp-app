@@ -1,75 +1,91 @@
 # Assembly Grasp
 
-Extract NCBI genome-assembly metadata by organism. Type a **genus** (e.g.
-`Drosophila`) or a **genus + species** (e.g. `Drosophila melanogaster`); the app
-returns every matching row from an NCBI `assembly_summary`-style table as a TSV
-and downloads it straight to your computer.
+Search NCBI genome assembly metadata by organism, filter source columns, and
+browse every matching record in pages. Genome sequences are not downloaded.
 
-There is **no backend server**. The whole thing is:
+## What the app does
 
-```
-React SPA (AWS Amplify) ──POST {query}──► Lambda (Function URL) ──reads──► S3
-        ▲                                         │                  ncbi_assembly_info.tsv
-        └──────────── filtered TSV (download) ◄───┘
-```
+- Organism matching compares complete leading words, ignoring capitalization.
+  `Geobacter` matches all names starting with that word; `Geobacter
+  sulfurreducens` selects that species and its named strains.
+- Any source column can be filtered with equality, inequality, text contains,
+  numeric minimum/maximum, or missing/present checks. Conditions are combined
+  with AND. Numeric comparisons exclude missing and non-finite values.
+- Results use server-side pagination: 25, 50, or 100 records per page, with
+  first/previous/next/last controls and page-number entry. Column visibility can
+  be changed independently of filtering and downloads.
+- Download the current page with every source column, or download all filtered
+  matches as one TSV (subject to the configured response-size cap).
+- The source remains a snapshot supplied by the owner; no automatic NCBI
+  refresh or BioSample/assembly deduplication is performed.
 
-* **Frontend** — a Vite + React + Tailwind SPA in `frontend/`, hosted on Amplify.
-  Same visual style/theme as the breseq web server.
-* **Lambda** — `lambda/assembly_grasp.py`, exposed via a Lambda **Function URL**.
-  It streams `ncbi_assembly_info.tsv` out of the S3 bucket
-  `assembly-grasp-bucket`, keeps the rows whose `organism_name` column starts
-  with the query, and returns them as `text/tab-separated-values`.
-* **S3** — the bucket `assembly-grasp-bucket` holds the single metadata file the
-  Lambda reads. The bucket itself does **not** need to be public.
+## Components
 
-## How matching works
+| Component | Location | Role |
+|---|---|---|
+| Frontend | `frontend/` | React, Vite, TypeScript, Tailwind; hosted on Amplify |
+| Search API | `lambda/assembly_grasp.py` | S3-backed filtering and pagination via a Lambda Function URL |
+| Preprocessor | `scripts/prepare_assembly_chunks.py` | Standard-library Python splitter for TheBelly or other Linux hosts |
+| Tests | `tests/test_chunked_search.py` | Offline integration checks with generated NCBI-style fixtures |
 
-The query is lower-cased and split into words. A row matches when the leading
-words of its `organism_name` equal the query words:
+## Fast indexed searches
 
-| query | matches |
-| --- | --- |
-| `Drosophila` | `Drosophila melanogaster`, `Drosophila pseudoobscura …`, … |
-| `Drosophila melanogaster` | `Drosophila melanogaster` and its strains/subspecies — **not** `Drosophila pseudoobscura` |
+The preprocessor groups records by their first casefolded `organism_name`
+word (usually genus) and subdivides large groups into bounded chunks. A
+manifest records the schema, chunk paths, counts, and common categorical
+values. The source does not need to be sorted.
 
-This covers both "genus" and "genus + species" cleanly, without matching a
-different genus that merely shares a prefix.
+With `ASSEMBLY_MANIFEST_KEY` configured, Lambda reads only the requested group.
+Unfiltered single-word searches can jump directly to a page using manifest row
+counts. Filtered and species searches scan that group's chunks to compute exact
+totals, so large groups can still take longer. No query cache is used.
 
-## Repository layout
+See [AWS_SETUP.md](AWS_SETUP.md) for the splitter commands, upload order, Lambda
+permissions/configuration, CORS, and deployment steps. Without a manifest,
+the new API still works by scanning the original file, with slower searches.
 
-```
-assembly-grasp-app/
-├── amplify.yml                 # Amplify monorepo build spec (appRoot: frontend)
-├── AWS_SETUP.md                # step-by-step S3 + Lambda + Amplify setup
-├── README.md
-├── frontend/                   # Vite + React + Tailwind SPA
-│   ├── .env.example            # VITE_AG_API_BASE, VITE_AG_BUCKET
-│   └── src/
-│       ├── App.tsx
-│       ├── components/         # Header, SearchView, ResultsTable
-│       └── lib/                # assembly-config.ts (Lambda client), theme, utils
-└── lambda/
-    └── assembly_grasp.py       # Function-URL handler: stream + filter + return TSV
-```
-
-## Local development
+## Local development and validation
 
 ```bash
 cd frontend
-cp .env.example .env.local      # point VITE_AG_API_BASE at your deployed Lambda
+cp .env.example .env.local
+# Set VITE_AG_API_BASE to the updated Lambda Function URL in .env.local.
 npm install
-npm run dev                     # http://localhost:5173
+npm run dev
 ```
 
-Without `VITE_AG_API_BASE` the app loads in **preview mode**: the UI works but
-searches fail until the env var is set.
+From the repository root:
 
-## Deploying
+```bash
+python3 -m unittest discover -s tests -v
+```
 
-See **[AWS_SETUP.md](./AWS_SETUP.md)** for the full walkthrough: create the
-bucket, upload the metadata file, deploy the Lambda + Function URL, wire CORS,
-and connect the repo to Amplify with the two build-time env vars.
+From `frontend/`, `npm run build` runs TypeScript checks and creates the static
+production build. Amplify builds only the frontend; Lambda is deployed separately.
 
----
+## API examples
+
+POST to the Function URL:
+
+```json
+{
+  "query": "Geobacter",
+  "format": "json",
+  "filters": [
+    {"column": "assembly_level", "op": "eq", "value": "Complete Genome"},
+    {"column": "genome_size", "op": "gte", "value": "3000000"}
+  ],
+  "page": 1,
+  "page_size": 50
+}
+```
+
+Use actual column names/units from the source. `operation: "schema"` returns
+available columns and common categorical suggestions. JSON pages return
+`columns`, `rows`, `total`, `page`, `page_size`, `pages`, `dataset_id`, `indexed`,
+and `scanned`. Send the returned `dataset_id` on subsequent pages/downloads;
+409 means the dataset changed and a new search is required. `format: "tsv"`
+returns all filtered matches up to `MAX_RESULT_BYTES`. Omitting `format` retains
+the original TSV API, including GET `?query=Geobacter`.
 
 © 2026 Middle Author Bioinformatics · For research and educational use only.

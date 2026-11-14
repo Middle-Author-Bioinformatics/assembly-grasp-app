@@ -1,187 +1,198 @@
-# Assembly Grasp — AWS setup
+# Assembly Grasp — indexed search setup
 
-End-to-end setup for the backend-less Assembly Grasp app: an S3 bucket holding
-the metadata file, a Lambda (with a Function URL) that filters it, and an Amplify
-site that calls the Lambda. Region used throughout: **us-east-2** (change to suit).
+Run preprocessing on TheBelly, upload a new dataset prefix, deploy the updated
+Lambda, then deploy the frontend. The original S3 object is never modified.
+No database server, pandas, extra conda environment, or Python package is
+needed for preprocessing; Python 3.8+ is sufficient.
 
-```
-Browser ──POST {query}──► Lambda Function URL ──GetObject──► s3://assembly-grasp-bucket/ncbi_assembly_info.tsv
-   ▲                                │
-   └────── filtered TSV ◄───────────┘
-```
+## 1. Prepare the data on TheBelly
 
----
-
-## 1. S3 bucket + metadata file
-
-1. Create a bucket named **`assembly-grasp-bucket`** in `us-east-2`
-   (Block Public Access **on** — it can stay fully private).
-2. Upload your metadata file to the bucket root as **`ncbi_assembly_info.tsv`**:
-
-   ```bash
-   aws s3 cp ncbi_assembly_info.tsv s3://assembly-grasp-bucket/ncbi_assembly_info.tsv
-   ```
-
-   The file is an NCBI `assembly_summary`-style TSV: optional `##` comment
-   line(s), then a header line beginning `#assembly_accession\t…` that includes
-   an `organism_name` column, then one assembly per row. The full NCBI file is
-   available at
-   `https://ftp.ncbi.nlm.nih.gov/genomes/genbank/assembly_summary_genbank.txt`.
-
-> The bucket and key are overridable via the Lambda env vars `ASSEMBLY_BUCKET`
-> and `ASSEMBLY_KEY` if you ever rename them.
-
----
-
-## 2. Lambda function
-
-Runtime: **Python 3.12**. Handler: **`assembly_grasp.lambda_handler`**.
-Code: `lambda/assembly_grasp.py` (single file, only dependency is `boto3`, which
-the Lambda runtime already bundles — no layer or packaging needed).
-
-### Create it
+From the repository root (or use the downloaded standalone script):
 
 ```bash
-cd lambda
-zip assembly_grasp.zip assembly_grasp.py
+python3 scripts/prepare_assembly_chunks.py \
+  --input ncbi_assembly_info.tsv \
+  --outdir ncbi_chunks_20261114_v1 \
+  --rows-per-chunk 20000
+```
 
-aws lambda create-function \
-  --function-name assembly-grasp \
-  --runtime python3.12 \
-  --handler assembly_grasp.lambda_handler \
-  --timeout 60 \
-  --memory-size 512 \
-  --role arn:aws:iam::<ACCOUNT_ID>:role/<assembly-grasp-role> \
-  --zip-file fileb://assembly_grasp.zip \
+Input can be `.tsv`, `.txt`, `.gz`, or `-` for stdin. The script detects the
+header using `assembly_accession` and `organism_name`; column positions need
+not match NCBI's usual order. Standard commented and unprefixed headers are
+accepted. It preserves all data columns and rows, repeats comments/headers in
+each chunk, handles interleaved groups, and limits open output files to 64.
+Concatenated tables can repeat commented or unprefixed headers. If later
+headers contain the same columns in a different order, their data are remapped
+to the first header's column order. Later comments are preserved in the
+manifest's `section_comments` field, with source line and row positions,
+rather than repeated in every chunk. `source_header_count` records how many
+source headers were accepted. All assembly rows, including duplicates, remain.
+Default chunk limits are 20,000 rows or 16 MiB, whichever is reached first.
+Adjust with `--rows-per-chunk`, `--bytes-per-chunk`, and `--max-open-files`.
+
+The output directory must not already exist. Processing uses a temporary
+sibling directory and publishes the completed directory only on success.
+If a run ends with `ERROR`, its temporary chunks are removed and the requested
+output directory is not published. After fixing the cause, rerun the command
+from the beginning. Start the S3 upload only after the final `Prepared ...`
+message and a completed `manifest.json` are present.
+Malformed rows, duplicate columns, incompatible section schemas, or decoding
+errors stop the build rather than silently dropping data. Reordered headers
+are supported; headers with added or missing columns fail with the differences
+listed. A single oversized
+row requires a larger byte limit. Empty fields are retained. Missing organism
+names are retained under an empty-name group, but cannot be found by a named
+organism query. Grouping uses the leading name word, not a taxonomic hierarchy;
+for example, names beginning `Candidatus` share that group.
+
+To read directly from S3 without saving a local copy of the source:
+
+```bash
+set -o pipefail
+aws s3 cp s3://assembly-grasp-bucket/ncbi_assembly_info.tsv - \
+  --region us-east-2 | \
+python3 scripts/prepare_assembly_chunks.py \
+  --input - --outdir ncbi_chunks_20261114_v1
+```
+
+Run only one of the preceding alternatives. Output chunks still occupy local
+disk. To preprocess without transferring the source to TheBelly, run the same
+pipeline on AWS compute in the bucket's region instead. S3 itself does not run
+the Python script or split the object through its console.
+
+## 2. Upload a new immutable dataset prefix
+
+Do not overwrite an existing index prefix while users are browsing it. For
+each refresh, choose a fresh output directory and S3 prefix. Upload the
+manifest last, after every chunk upload succeeds:
+
+```bash
+aws s3 sync ncbi_chunks_20261114_v1/ \
+  s3://assembly-grasp-bucket/assembly-index/2026-11-14-v1/ \
+  --exclude 'manifest.json' --region us-east-2
+```
+
+Only after the command above exits successfully:
+
+```bash
+aws s3 cp ncbi_chunks_20261114_v1/manifest.json \
+  s3://assembly-grasp-bucket/assembly-index/2026-11-14-v1/manifest.json \
   --region us-east-2
 ```
 
-Update later with:
+The bucket stays private. The account used on TheBelly needs permission to read
+the source (if streaming it) and upload objects to the new prefix.
+
+## 3. Lambda code and permissions
+
+Runtime: Python 3.12. Code: `lambda/assembly_grasp.py`. Handler:
+`assembly_grasp.lambda_handler`. `boto3` is provided by the Lambda runtime.
+
+If using the AWS CLI, create the ZIP from the repository root and replace
+`YOUR_FUNCTION_NAME` with the existing function's actual name:
 
 ```bash
+zip -j assembly_grasp.zip lambda/assembly_grasp.py
 aws lambda update-function-code \
-  --function-name assembly-grasp \
+  --function-name YOUR_FUNCTION_NAME \
   --zip-file fileb://assembly_grasp.zip --region us-east-2
 ```
 
-### Execution-role IAM policy
+Alternatively paste the file in the Lambda editor, set the matching handler,
+and deploy. In Configuration → Environment variables, add/update these values
+while preserving any other environment variables:
 
-The role needs only read access to the one object:
+| Variable | Value |
+|---|---|
+| `ASSEMBLY_BUCKET` | `assembly-grasp-bucket` |
+| `ASSEMBLY_MANIFEST_KEY` | `assembly-index/2026-11-14-v1/manifest.json` |
+| `AWS_REGION_NAME` | `us-east-2` |
+| `MAX_RESULT_BYTES` | `5000000` (default) |
+
+`ASSEMBLY_KEY=ncbi_assembly_info.tsv` is used only when the manifest variable is
+empty. Missing or invalid configured manifests fail explicitly; the API does
+not silently scan the full file instead. Removing the manifest variable
+restores the full-file fallback. CORS no longer uses `ALLOWED_ORIGINS` in code.
+
+The execution role needs CloudWatch logging permissions and `s3:GetObject` on
+the new manifest/chunks, for example this additional policy statement:
 
 ```json
 {
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": "s3:GetObject",
-      "Resource": "arn:aws:s3:::assembly-grasp-bucket/ncbi_assembly_info.tsv"
-    }
-  ]
+  "Effect": "Allow",
+  "Action": "s3:GetObject",
+  "Resource": "arn:aws:s3:::assembly-grasp-bucket/assembly-index/*"
 }
 ```
 
-(Plus the standard `AWSLambdaBasicExecutionRole` for CloudWatch logs.)
+Retain read permission on the original source if fallback mode is needed.
+Lambda needs no S3 write, list, or delete permission for indexed searches.
+Start by benchmarking 1,024 MB memory and a 120-second timeout. Actual settings
+should reflect measured scan times for the largest commonly queried groups.
 
-### Environment variables (all optional — defaults shown)
+## 4. Function URL CORS and public invocation
 
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `ASSEMBLY_BUCKET` | `assembly-grasp-bucket` | bucket to read |
-| `ASSEMBLY_KEY` | `ncbi_assembly_info.tsv` | object key |
-| `AWS_REGION_NAME` | `us-east-2` | region for the S3 client |
-| `ALLOWED_ORIGINS` | *(empty = any)* | comma-separated web-origin allow-list |
-| `MAX_RESULT_BYTES` | `5000000` | cap on response size (~5 MB) |
+Configure CORS exclusively on the Function URL, not in both code and URL
+settings. In Configuration → Function URL → Edit:
 
-For production, set `ALLOWED_ORIGINS` to your real origins, e.g.
-`https://main.dXXXX.amplifyapp.com,https://assembly.midauthorbio.com`.
+| Setting | Value |
+|---|---|
+| Allowed origin | `https://main.d3p0n8syijshxf.amplifyapp.com` |
+| Allowed methods | `GET`, `POST` |
+| Allowed request headers | `content-type` |
+| Exposed headers | `content-disposition`, `x-assembly-match-count`, `x-assembly-total-rows` |
+| Max age | `600` |
+| Allow credentials | Off |
 
-### Sizing notes
+Add any custom domain and local development origin separately, without
+trailing slashes. AWS handles preflight OPTIONS responses. The handler does
+not add duplicate CORS headers.
 
-* **Timeout / memory** — the Lambda streams the file line-by-line rather than
-  loading it all, so memory stays low, but a multi-GB file takes time to scan.
-  60 s / 512 MB is a safe start; raise the timeout if your file is very large.
-* **Response size** — a Lambda Function URL buffered response is capped at ~6 MB.
-  `MAX_RESULT_BYTES` (default 5 MB) guards against blowing past that: an
-  over-large result returns HTTP 413 asking the user to narrow the search. A
-  single genus of bacteria can be large — encourage genus + species for those.
-  (If you need bigger downloads, switch the Function URL to **RESPONSE_STREAM**
-  invoke mode, or have the Lambda write the TSV to S3 and return a presigned
-  GET URL instead.)
+For the existing public application, retain Function URL auth type `NONE` and
+its resource policy. If creating a new public Function URL with the CLI,
+both `lambda:InvokeFunctionUrl` (condition `FunctionUrlAuthType=NONE`) and
+`lambda:InvokeFunction` (condition `InvokedViaFunctionUrl=true`) need public
+resource-policy permissions. The execution role's S3 policy alone does not
+grant browser invocation permission.
 
-### Function URL + CORS
+## 5. Deploy the frontend after Lambda is ready
 
-Create a Function URL with **auth type `NONE`** (the data is public reference
-metadata) and configure CORS:
+Keep Amplify build variable `VITE_AG_API_BASE` set to the updated Function URL.
+Deploy the feature branch or merge the tested changes to the Amplify-connected
+branch when ready. The repo's `amplify.yml` builds `frontend/` only. GitHub
+frontend changes do not deploy Lambda or upload/preprocess the data.
 
-```bash
-aws lambda create-function-url-config \
-  --function-name assembly-grasp \
-  --auth-type NONE \
-  --cors '{
-    "AllowOrigins": ["*"],
-    "AllowMethods": ["POST","GET"],
-    "AllowHeaders": ["content-type"],
-    "ExposeHeaders": ["content-disposition","x-assembly-match-count","x-assembly-total-rows"],
-    "MaxAge": 600
-  }' \
-  --region us-east-2
-```
-
-Tighten `AllowOrigins` to your Amplify/custom domain for production. Note the
-returned `FunctionUrl` — that is `VITE_AG_API_BASE`.
-
-> The handler also sets CORS headers itself (driven by `ALLOWED_ORIGINS`), so set
-> both consistently. Exposing `content-disposition` lets the browser read the
-> download filename the Lambda chose.
-
-### Smoke test
+Smoke test the API before updating the website:
 
 ```bash
-curl -s -X POST "<FunctionUrl>" \
+curl -sS YOUR_FUNCTION_URL \
   -H 'Content-Type: application/json' \
-  -d '{"query":"Drosophila melanogaster"}' | head
+  -d '{"query":"Geobacter","format":"json","page":1,"page_size":25}'
 ```
 
-You should get TSV back (comment + header + matching rows). A GET also works:
-`curl -s "<FunctionUrl>?query=Drosophila%20melanogaster"`.
+Check `indexed` is true, `columns` matches the source, totals look correct,
+and page 2 continues with different records. Then test filters in the UI.
 
----
+## Scope and performance
 
-## 3. Amplify (frontend hosting)
+- A nonempty organism query is still required. Filters apply across every
+  match for that query before the page is selected, not just the visible rows.
+- Unfiltered single-word queries use manifest counts to read only the chunk(s)
+  needed for the requested page. Filters or species queries scan that entire
+  group for exact totals on each request; large groups can still be slower.
+- The complete match set is not sent to the browser at once. Every record is
+  reachable through pages even when the aggregate result exceeds 5 MB.
+- Full TSV downloads remain bounded by `MAX_RESULT_BYTES`; large exports must
+  be narrowed or downloaded page by page. This change does not implement
+  asynchronous export to S3. Raising the cap above Lambda's buffered-response
+  limits is not a solution.
+- Column selection affects display only. Downloads include every source
+  column, and no assemblies are deduplicated or quality-filtered implicitly.
+- Each manifest has a dataset UUID. Page/download requests pin that UUID;
+  after a dataset refresh, rerun the search if the API returns 409. Lambda
+  caches the immutable manifest in warm instances. Never modify a published
+  prefix in place; change the environment variable to a newly uploaded prefix.
+- The tests use generated fixtures because no source TSV attachment was
+  available during implementation. Validate one real dataset on TheBelly
+  before publishing its index.
 
-1. Push this repo to GitHub/GitLab.
-2. In the Amplify console → **New app → Host web app** → connect the repo.
-3. **App root / monorepo**: set the build app root to **`frontend`** (the
-   included `amplify.yml` already declares `appRoot: frontend`).
-4. **Environment variables** (App settings → Environment variables):
-
-   | Name | Value |
-   | --- | --- |
-   | `VITE_AG_API_BASE` | the Lambda **Function URL** from step 2 |
-   | `VITE_AG_BUCKET` | `assembly-grasp-bucket` (display only) |
-
-5. Deploy. Vite reads `VITE_*` vars at build time, so **re-deploy after changing
-   them**.
-
-If the env vars are missing the site still builds but runs in **preview mode**
-(searches disabled with an explanatory banner).
-
----
-
-## 4. Verify end-to-end
-
-1. Open the Amplify URL.
-2. Type `Drosophila melanogaster`, hit **Search & download**.
-3. A `Drosophila_melanogaster.tsv` downloads, and a preview table + match count
-   appear. Done.
-
-## Troubleshooting
-
-| Symptom | Likely cause |
-| --- | --- |
-| Banner "Preview mode" | `VITE_AG_API_BASE` not set at build time → set it and redeploy |
-| CORS error in console | Function URL CORS `AllowOrigins` / Lambda `ALLOWED_ORIGINS` don't include your site origin |
-| HTTP 502 "could not read s3://…" | bucket/key wrong, or the execution role lacks `s3:GetObject` |
-| HTTP 404 "no assemblies found" | no `organism_name` starts with the query (check spelling/capitalisation — matching is case-insensitive) |
-| HTTP 413 "result too large" | genus too broad → search genus + species, or raise `MAX_RESULT_BYTES` / use response streaming |

@@ -1,266 +1,329 @@
-"""assembly-grasp — Lambda Function URL that extracts assembly metadata rows.
+"""Assembly Grasp: chunk-aware filtering, JSON pages, and bounded TSV downloads.
 
-Assembly Grasp is a backend-less web app: a React SPA on Amplify talks directly
-to THIS Lambda (via its Function URL), and there is no server in between.
-
-What it does
-------------
-The Lambda reads a single tab-separated metadata file out of S3 —
-
-    s3://<ASSEMBLY_BUCKET>/<ASSEMBLY_KEY>     (default: ncbi_assembly_info.tsv)
-
-— which is an NCBI `assembly_summary`-style table. The user types a *genus* (e.g.
-"Drosophila") or a *genus + species* (e.g. "Drosophila melanogaster"); the Lambda
-streams the file line-by-line, keeps the comment/header lines, and emits every
-data row whose `organism_name` column begins with the requested name. The matching
-rows are returned as a TSV, which the browser downloads immediately.
-
-Endpoint contract (single route, POST):
-    POST  {"query": "Drosophila melanogaster"}
-    ->    200  text/tab-separated-values   (the filtered TSV, with header)
-          headers:
-            Content-Disposition: attachment; filename="Drosophila_melanogaster.tsv"
-            X-Assembly-Match-Count: <number of data rows matched>
-            X-Assembly-Total-Rows:  <number of data rows scanned>
-
-A GET request with a `?query=...` string is also accepted, so the URL can be
-shared / bookmarked.
-
-Why stream instead of read-all: a full NCBI assembly_summary file can be 1-2 GB.
-We never hold the whole thing in memory — we iterate the S3 streaming body one
-line at a time and only accumulate the (much smaller) matched rows.
-
-Matching rule
--------------
-The query is lower-cased and split into whitespace tokens. A row matches when the
-leading tokens of its `organism_name` equal the query tokens:
-
-    query "Drosophila"               -> matches "Drosophila melanogaster",
-                                                 "Drosophila pseudoobscura ...", ...
-    query "Drosophila melanogaster"  -> matches "Drosophila melanogaster" (and its
-                                                 strains/subspecies) but NOT
-                                                 "Drosophila pseudoobscura"
-
-This cleanly covers both "genus" and "genus + species" without matching a genus
-whose name merely starts with the same letters.
-
-Environment variables
----------------------
-    ASSEMBLY_BUCKET        (optional)  S3 bucket. Default "assembly-grasp-bucket".
-    ASSEMBLY_KEY           (optional)  Object key. Default "ncbi_assembly_info.tsv".
-    AWS_REGION_NAME        (optional)  Default "us-east-2".
-    ALLOWED_ORIGINS        (optional)  Comma-separated allow-list of web origins,
-                                       e.g. "https://main.dXXXX.amplifyapp.com,
-                                             https://assembly.midauthorbio.com".
-                                       Empty = reflect any Origin (dev only).
-    MAX_RESULT_BYTES       (optional)  Safety cap on the response body size in
-                                       bytes. Default 5_000_000 (~5 MB, under the
-                                       Lambda Function URL buffered-response limit).
-                                       If a result would exceed this, the Lambda
-                                       returns HTTP 413 with a JSON error so the
-                                       frontend can ask the user to narrow down.
-
-IAM: the execution role needs s3:GetObject on
-     arn:aws:s3:::<ASSEMBLY_BUCKET>/<ASSEMBLY_KEY>.
+ASSEMBLY_MANIFEST_KEY enables the index built by prepare_assembly_chunks.py.
+Without it, the original ASSEMBLY_KEY is scanned (functional, but slower).
+CORS is managed exclusively by the Lambda Function URL configuration.
 """
+import base64
+from contextlib import closing
+from functools import lru_cache
 import io
 import json
+import math
 import os
+from pathlib import PurePosixPath
 import re
 
 import boto3
 
 ASSEMBLY_BUCKET = os.environ.get("ASSEMBLY_BUCKET", "assembly-grasp-bucket")
 ASSEMBLY_KEY = os.environ.get("ASSEMBLY_KEY", "ncbi_assembly_info.tsv")
+MANIFEST_KEY = os.environ.get("ASSEMBLY_MANIFEST_KEY", "").strip()
 REGION = os.environ.get("AWS_REGION_NAME", "us-east-2")
-MAX_RESULT_BYTES = int(os.environ.get("MAX_RESULT_BYTES", str(5_000_000)))
-ALLOWED_ORIGINS = set(
-    o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "").split(",") if o.strip()
-)
-
-# The organism name lives in the `organism_name` column of the NCBI
-# assembly_summary table. We resolve its index from the header row at runtime so
-# the code keeps working if NCBI reorders columns, but fall back to the known
-# position (8th column, 0-based index 7) if the header can't be parsed.
-ORGANISM_COL_NAME = "organism_name"
-ORGANISM_COL_FALLBACK = 7
-
-# Used to build a safe download filename from the user's query.
-_FNAME_CLEAN = re.compile(r"[^A-Za-z0-9._-]+")
-
+MAX_RESULT_BYTES = int(os.environ.get("MAX_RESULT_BYTES", "5000000"))
 s3 = boto3.client("s3", region_name=REGION)
+OPERATORS = {"eq", "ne", "contains", "gte", "lte", "missing", "present"}
+MISSING = {"", "na", "n/a", "nan", "none", "null", "-"}
 
 
-def _cors(origin):
-    """Reflect an allowed Origin (or any Origin when the allow-list is empty)."""
-    if origin and (not ALLOWED_ORIGINS or origin in ALLOWED_ORIGINS):
-        return {
-            "Access-Control-Allow-Origin": origin,
-            "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
-            "Access-Control-Allow-Headers": "Content-Type",
-            "Access-Control-Expose-Headers":
-                "Content-Disposition, X-Assembly-Match-Count, X-Assembly-Total-Rows",
-            "Access-Control-Max-Age": "600",
-            "Vary": "Origin",
-        }
-    return {}
+class RequestError(Exception):
+    def __init__(self, message, status=400):
+        super().__init__(message)
+        self.status = status
 
 
-def _json(status, headers, body):
-    return {
-        "statusCode": status,
-        "headers": {"Content-Type": "application/json", **headers},
-        "body": json.dumps(body),
-    }
+def _json(status, body):
+    encoded = json.dumps(body, ensure_ascii=False, separators=(",", ":"))
+    if len(encoded.encode("utf-8")) > MAX_RESULT_BYTES:
+        status = 413
+        encoded = json.dumps({"error": "Page too large. Choose a smaller page size."})
+    return {"statusCode": status, "headers": {
+        "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store",
+    }, "body": encoded}
 
 
-def _safe_filename(query):
-    base = _FNAME_CLEAN.sub("_", query.strip()).strip("_") or "assemblies"
-    return f"{base}.tsv"
+def _lines(key, etag=None):
+    args = {"Bucket": ASSEMBLY_BUCKET, "Key": key}
+    if etag:
+        args["IfMatch"] = etag
+    obj = s3.get_object(**args)
+    with io.TextIOWrapper(obj["Body"], encoding="utf-8-sig", errors="strict", newline="") as stream:
+        for line in stream:
+            yield line.rstrip("\r\n").lstrip("\ufeff")
 
 
-def _extract_query(event, method):
-    """Pull the query string from a GET ?query= or a POST JSON body."""
+@lru_cache(maxsize=1)
+def _manifest():
+    # Index prefixes are immutable: upload a fresh prefix for each refresh.
+    obj = s3.get_object(Bucket=ASSEMBLY_BUCKET, Key=MANIFEST_KEY)
+    with closing(obj["Body"]) as body:
+        manifest = json.load(body)
+    if manifest.get("schema_version") != 1:
+        raise RuntimeError("Unsupported assembly manifest version")
+    if "organism_name" not in manifest.get("columns", []):
+        raise RuntimeError("Manifest has no organism_name column")
+    return manifest
+
+
+def _source(query):
+    if MANIFEST_KEY:
+        manifest = _manifest()
+        words = query.casefold().split()
+        group = manifest["groups"].get(words[0]) if words else None
+        root = str(PurePosixPath(MANIFEST_KEY).parent)
+        root = "" if root == "." else root + "/"
+        keys = []
+        for chunk in (group or {}).get("chunks", []):
+            key = chunk["key"]
+            if key.startswith("/") or ".." in PurePosixPath(key).parts:
+                raise RuntimeError("Invalid key in assembly manifest")
+            keys.append(root + key)
+        return manifest, keys
+    # A metadata-only request reads just the source header and closes the body.
+    obj = s3.get_object(Bucket=ASSEMBLY_BUCKET, Key=ASSEMBLY_KEY)
+    comments = []
+    columns = None
+    with io.TextIOWrapper(obj["Body"], encoding="utf-8-sig", errors="strict", newline="") as stream:
+        for raw in stream:
+            line = raw.rstrip("\r\n")
+            candidate = line.lstrip("#").strip().split("\t")
+            if "organism_name" in candidate and "assembly_accession" in candidate:
+                columns = [c.strip() for c in candidate]
+                break
+            if line.startswith("#"):
+                comments.append(line)
+            elif line:
+                break
+    if columns is None:
+        raise RuntimeError("Source TSV has no recognizable assembly header")
+    return {"columns": columns, "comments": comments, "facets": {},
+            "dataset_id": obj.get("ETag", "unindexed"), "total_rows": None}, [ASSEMBLY_KEY]
+
+
+def _number(raw):
+    try:
+        value = float(str(raw).strip())
+    except (ValueError, TypeError):
+        return None
+    return value if math.isfinite(value) else None
+
+
+def _filters(raw, columns):
+    if not isinstance(raw, list) or len(raw) > 20:
+        raise RequestError("filters must be an array with at most 20 conditions")
+    compiled = []
+    for rule in raw:
+        if not isinstance(rule, dict):
+            raise RequestError("Each filter must be an object")
+        column, op = rule.get("column"), rule.get("op")
+        if not isinstance(column, str) or not isinstance(op, str) or column not in columns or op not in OPERATORS:
+            raise RequestError("Unknown filter column or operator")
+        value = str(rule.get("value", "")).strip()
+        if len(value) > 500:
+            raise RequestError("Filter value too long")
+        if op in ("gte", "lte"):
+            value = _number(value)
+            if value is None:
+                raise RequestError("Numeric filters require a finite number")
+        elif op not in ("missing", "present") and not value:
+            raise RequestError("Enter a filter value or use 'is missing'")
+        else:
+            value = value.casefold()
+        compiled.append((columns.index(column), op, value))
+    return compiled
+
+
+def _passes(cells, rules):
+    for idx, op, expected in rules:
+        value = cells[idx].strip().casefold()
+        if op == "missing":
+            ok = value in MISSING
+        elif op == "present":
+            ok = value not in MISSING
+        elif op in ("gte", "lte"):
+            number = _number(value)
+            ok = number is not None and (number >= expected if op == "gte" else number <= expected)
+        elif op == "eq":
+            ok = value == expected
+        elif op == "ne":
+            ok = value != expected
+        else:
+            ok = expected in value
+        if not ok:
+            return False
+    return True
+
+
+def _integer(raw, default, low, high, name):
+    if raw is None:
+        return default
+    if isinstance(raw, bool) or len(str(raw)) > 10 or not re.fullmatch(r"[0-9]+", str(raw)):
+        raise RequestError(name + " must be an integer")
+    value = int(raw)
+    if not low <= value <= high:
+        raise RequestError("%s must be between %d and %d" % (name, low, high))
+    return value
+
+
+def _request(event, method):
     if method == "GET":
-        params = event.get("queryStringParameters") or {}
-        return str(params.get("query") or params.get("q") or "").strip()
-
+        body = dict(event.get("queryStringParameters") or {})
+        if "filters" in body:
+            body["filters"] = json.loads(body["filters"])
+        return body
     raw = event.get("body") or "{}"
     if event.get("isBase64Encoded"):
-        import base64
-        try:
-            raw = base64.b64decode(raw).decode("utf-8")
-        except Exception:
-            return None  # signal "bad body"
-    try:
-        body = json.loads(raw)
-    except (json.JSONDecodeError, TypeError):
-        return None
+        raw = base64.b64decode(raw, validate=True).decode("utf-8")
+    body = json.loads(raw)
     if not isinstance(body, dict):
-        return None
-    return str(body.get("query") or body.get("q") or "").strip()
+        raise RequestError("Request body must be a JSON object")
+    return body
 
 
-def _iter_lines(stream):
-    """Yield decoded text lines from a boto3 StreamingBody without loading it all."""
-    buffered = io.TextIOWrapper(stream, encoding="utf-8", errors="replace", newline="")
-    for line in buffered:
-        yield line.rstrip("\n").rstrip("\r")
+def _indexed_unfiltered_page(meta, keys, query, page, page_size):
+    """Use manifest row counts to jump straight to relevant chunks."""
+    group = meta["groups"].get(query.casefold().split()[0], {"rows": 0, "chunks": []})
+    total = group["rows"]
+    skip = (page - 1) * page_size
+    rows, scanned = [], 0
+    for key, chunk in zip(keys, group["chunks"]):
+        if skip >= chunk["rows"]:
+            skip -= chunk["rows"]
+            continue
+        with closing(_lines(key)) as lines:
+            for line in lines:
+                if not line or line.startswith("#"):
+                    continue
+                scanned += 1
+                if skip:
+                    skip -= 1
+                    continue
+                cells = line.split("\t")
+                if len(cells) != len(meta["columns"]):
+                    raise RuntimeError("Malformed row in assembly chunk")
+                rows.append(cells)
+                if len(rows) == page_size:
+                    break
+        if len(rows) == page_size:
+            break
+    print(json.dumps({"msg": "query_done", "query": query, "matches": total,
+                      "scanned": scanned, "page": page, "indexed": True, "format": "json"}))
+    return _json(200, {"columns": meta["columns"], "rows": rows, "total": total,
+                       "page": page, "page_size": page_size,
+                       "pages": max(1, (total + page_size - 1) // page_size),
+                       "dataset_id": meta["dataset_id"], "indexed": True, "scanned": scanned})
 
 
-def _organism_index(header_line):
-    cols = header_line.lstrip("#").split("\t")
-    try:
-        return cols.index(ORGANISM_COL_NAME)
-    except ValueError:
-        return ORGANISM_COL_FALLBACK
-
-
-def _matches(organism_name, q_tokens):
-    org_tokens = organism_name.lower().split()
-    return org_tokens[: len(q_tokens)] == q_tokens
-
-
-def lambda_handler(event, _context):
-    headers_in = event.get("headers") or {}
-    origin = headers_in.get("origin") or headers_in.get("Origin")
-    method = (
-        (event.get("requestContext", {}) or {})
-        .get("http", {})
-        .get("method", "POST")
-    )
-    cors = _cors(origin)
-
+def lambda_handler(event, context):
+    method = ((event.get("requestContext") or {}).get("http") or {}).get("method", "POST").upper()
     if method == "OPTIONS":
-        return {"statusCode": 204, "headers": cors, "body": ""}
-    if method not in ("POST", "GET"):
-        return _json(405, cors, {"error": f"method {method} not allowed"})
-
-    query = _extract_query(event, method)
-    if query is None:
-        return _json(400, cors, {"error": "invalid request body"})
-    if not query:
-        return _json(400, cors, {"error": "missing 'query' (a genus or genus + species name)"})
-    if len(query) > 200:
-        return _json(400, cors, {"error": "query too long"})
-
-    q_tokens = query.lower().split()
-
-    # Stream the metadata file from S3 and filter row-by-row.
+        return {"statusCode": 204, "body": ""}
+    if method not in ("GET", "POST"):
+        return _json(405, {"error": "Method not allowed"})
     try:
-        obj = s3.get_object(Bucket=ASSEMBLY_BUCKET, Key=ASSEMBLY_KEY)
-    except Exception as e:  # noqa: BLE001 — surface the S3 error to the client
-        print(json.dumps({"msg": "s3_get_failed", "bucket": ASSEMBLY_BUCKET,
-                          "key": ASSEMBLY_KEY, "error": str(e)}))
-        return _json(502, cors, {
-            "error": f"could not read s3://{ASSEMBLY_BUCKET}/{ASSEMBLY_KEY}",
-            "detail": str(e),
-        })
-
-    out = io.StringIO()
-    out_bytes = 0
-    org_idx = ORGANISM_COL_FALLBACK
-    header_seen = False
-    match_count = 0
-    total_rows = 0
-    truncated = False
-
-    for line in _iter_lines(obj["Body"]):
-        if not line:
-            continue
-        # Comment lines: the leading "##" description plus the "#<col>..." header.
-        if line.startswith("#"):
-            if not header_seen and ORGANISM_COL_NAME in line:
-                org_idx = _organism_index(line)
-                header_seen = True
-            out.write(line + "\n")
-            out_bytes += len(line) + 1
-            continue
-
-        total_rows += 1
-        cols = line.split("\t")
-        if org_idx >= len(cols):
-            continue
-        if _matches(cols[org_idx], q_tokens):
-            row = line + "\n"
-            enc_len = len(row.encode("utf-8"))
-            if out_bytes + enc_len > MAX_RESULT_BYTES:
-                truncated = True
-                break
-            out.write(row)
-            out_bytes += enc_len
-            match_count += 1
-
-    print(json.dumps({
-        "msg": "query_done", "query": query, "matches": match_count,
-        "scanned": total_rows, "truncated": truncated,
-    }))
-
-    if truncated:
-        return _json(413, cors, {
-            "error": "result too large",
-            "detail": (
-                f"More than ~{MAX_RESULT_BYTES // 1_000_000} MB of matching rows for "
-                f"{query!r}. Narrow the search by adding a species name."
-            ),
-            "matches_so_far": match_count,
-        })
-
-    if match_count == 0:
-        return _json(404, cors, {
-            "error": "no assemblies found",
-            "detail": f"No rows whose organism_name starts with {query!r}.",
-            "scanned": total_rows,
-        })
-
-    return {
-        "statusCode": 200,
-        "headers": {
+        try:
+            body = _request(event, method)
+        except (ValueError, UnicodeError, TypeError) as exc:
+            raise RequestError("Invalid request body") from exc
+        query = " ".join(str(body.get("query") or body.get("q") or "").split())
+        schema_only = body.get("operation") == "schema"
+        if not schema_only and not query:
+            raise RequestError("Enter a genus or an organism name")
+        if len(query) > 200:
+            raise RequestError("Query too long")
+        meta, keys = _source(query)
+        columns = meta["columns"]
+        dataset_id = meta["dataset_id"]
+        if body.get("dataset_id") and body["dataset_id"] != dataset_id:
+            raise RequestError("Dataset changed. Run a new search.", 409)
+        if schema_only:
+            return _json(200, {"columns": columns, "facets": meta.get("facets", {}),
+                               "dataset_id": dataset_id, "indexed": bool(MANIFEST_KEY)})
+        rules = _filters(body.get("filters", []), columns)
+        fmt = body.get("format", "tsv")
+        if fmt not in ("json", "tsv"):
+            raise RequestError("format must be json or tsv")
+        page = _integer(body.get("page"), 1, 1, 100000000, "page")
+        page_size = _integer(body.get("page_size"), 50, 1, 100, "page_size")
+        start, end = (page - 1) * page_size, page * page_size
+        org_idx = columns.index("organism_name")
+        q_words = query.casefold().split()
+        if MANIFEST_KEY and fmt == "json" and not rules and len(q_words) == 1:
+            return _indexed_unfiltered_page(meta, keys, query, page, page_size)
+        rows = []
+        total = 0
+        scanned = 0
+        prefix = "\n".join(meta.get("comments", []) + ["#" + "\t".join(columns)]) + "\n"
+        out = io.StringIO() if fmt == "tsv" else None
+        if out is not None:
+            out.write(prefix)
+        out_bytes = len(prefix.encode("utf-8"))
+        for key in keys:
+            if context and context.get_remaining_time_in_millis() < 2000:
+                raise RequestError("Search needs more time. Enable the chunk index or increase the Lambda timeout.", 503)
+            # closing also closes the S3 body if a result-size limit interrupts iteration.
+            with closing(_lines(key, None if MANIFEST_KEY else dataset_id)) as lines:
+                identity_order = list(range(len(columns)))
+                input_order = identity_order
+                for line in lines:
+                    if not line:
+                        continue
+                    cells = line.split("\t")
+                    if line.startswith("#"):
+                        candidate = [c.strip() for c in line.lstrip("#").strip().split("\t")]
+                        if "assembly_accession" not in candidate and "organism_name" not in candidate:
+                            continue
+                    elif "assembly_accession" in cells and "organism_name" in cells:
+                        candidate = [c.strip() for c in cells]
+                    else:
+                        candidate = None
+                    if candidate is not None:
+                        if len(candidate) != len(set(candidate)) or set(candidate) != set(columns):
+                            raise RuntimeError("Incompatible assembly header in dataset")
+                        input_order = [candidate.index(c) for c in columns]
+                        continue
+                    if len(cells) != len(columns):
+                        raise RuntimeError("Malformed row in assembly dataset")
+                    if input_order != identity_order:
+                        cells = [cells[i] for i in input_order]
+                        line = "\t".join(cells)
+                    scanned += 1
+                    if scanned % 4096 == 0 and context and context.get_remaining_time_in_millis() < 2000:
+                        raise RequestError("Search needs more time. Enable the chunk index or increase the Lambda timeout.", 503)
+                    if cells[org_idx].casefold().split()[:len(q_words)] != q_words or not _passes(cells, rules):
+                        continue
+                    if out is not None:
+                        row = line + "\n"
+                        out_bytes += len(row.encode("utf-8"))
+                        if out_bytes > MAX_RESULT_BYTES:
+                            raise RequestError("Full TSV exceeds the download limit. Add filters or download individual pages. All matches remain available in the paginated viewer.", 413)
+                        out.write(row)
+                    elif start <= total < end:
+                        rows.append(cells)
+                    total += 1
+        print(json.dumps({"msg": "query_done", "query": query, "matches": total,
+                          "scanned": scanned, "chunks": len(keys), "page": page,
+                          "indexed": bool(MANIFEST_KEY), "format": fmt}))
+        if fmt == "json":
+            return _json(200, {"columns": columns, "rows": rows, "total": total,
+                               "page": page, "page_size": page_size,
+                               "pages": max(1, (total + page_size - 1) // page_size),
+                               "dataset_id": dataset_id, "indexed": bool(MANIFEST_KEY),
+                               "scanned": scanned})
+        if not total:
+            return _json(404, {"error": "No assemblies match this search and filters"})
+        filename = (re.sub(r"[^A-Za-z0-9._-]+", "_", query).strip("_") or "assemblies") + ".tsv"
+        return {"statusCode": 200, "headers": {
             "Content-Type": "text/tab-separated-values; charset=utf-8",
-            "Content-Disposition": f'attachment; filename="{_safe_filename(query)}"',
-            "X-Assembly-Match-Count": str(match_count),
-            "X-Assembly-Total-Rows": str(total_rows),
-            **cors,
-        },
-        "body": out.getvalue(),
-    }
+            "Content-Disposition": 'attachment; filename="%s"' % filename,
+            "Cache-Control": "no-store", "X-Assembly-Match-Count": str(total),
+            "X-Assembly-Total-Rows": str(scanned),
+        }, "body": out.getvalue()}
+    except RequestError as exc:
+        return _json(exc.status, {"error": str(exc)})
+    except Exception:
+        # Do not expose internal S3/IAM details in public API errors.
+        import traceback
+        traceback.print_exc()
+        return _json(502, {"error": "Could not read the assembly dataset. Check the Lambda logs and dataset configuration."})
+

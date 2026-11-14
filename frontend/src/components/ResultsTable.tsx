@@ -1,72 +1,39 @@
-import { colIndex, type ParsedTsv } from "../lib/assembly-config";
-
-// A handful of the most useful columns to surface in the preview. The FULL set
-// of columns is preserved in the downloaded TSV — this is just a readable
-// at-a-glance table.
-const PREVIEW_COLS = [
-  "assembly_accession",
-  "organism_name",
-  "infraspecific_name",
-  "assembly_level",
-  "refseq_category",
-  "seq_rel_date",
-  "asm_name",
-];
-
-const MAX_PREVIEW_ROWS = 50;
-
-export function ResultsTable({ parsed }: { parsed: ParsedTsv }) {
-  const { header, rows } = parsed;
-
-  // Resolve the preview column indices that actually exist in this header.
-  const cols = PREVIEW_COLS
-    .map((name) => ({ name, idx: colIndex(header, name) }))
-    .filter((c) => c.idx >= 0);
-
-  const shown = rows.slice(0, MAX_PREVIEW_ROWS);
-
-  return (
-    <div className="overflow-x-auto rounded-lg border border-border">
+import { useState } from "react";
+import type { QueryResult } from "../lib/assembly-config";
+const DEFAULT_COLUMNS = ["assembly_accession", "organism_name", "infraspecific_name",
+  "assembly_level", "refseq_category", "seq_rel_date", "asm_name"];
+export function ResultsTable({ result }: { result: QueryResult }) {
+  const [selection, setSelection] = useState<string[] | null>(null);
+  const columns = result.columns;
+  const selected = selection ?? DEFAULT_COLUMNS.filter(c => columns.includes(c));
+  const shown = columns.map((name, idx) => ({ name, idx })).filter(c => selected.includes(c.name));
+  return <div className="space-y-3">
+    <details className="text-xs">
+      <summary className="cursor-pointer text-fg-muted">Choose columns ({shown.length} of {columns.length})</summary>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <button className="btn-ghost" onClick={() => setSelection([...columns])}>Show all columns</button>
+        <button className="btn-ghost" onClick={() => setSelection(null)}>Reset columns</button>
+      </div>
+      <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+        {columns.map(name => <label key={name} className="flex items-center gap-2 break-all">
+          <input type="checkbox" checked={selected.includes(name)} onChange={e => {
+            setSelection(e.target.checked ? [...selected, name] : selected.filter(c => c !== name));
+          }} /> {name}
+        </label>)}
+      </div>
+    </details>
+    <div className="overflow-x-auto rounded-lg border border-border" role="region" aria-label="Assembly results" tabIndex={0}>
       <table className="w-full text-xs border-collapse">
-        <thead>
-          <tr className="bg-surface-2 text-fg-muted">
-            {cols.map((c) => (
-              <th
-                key={c.name}
-                className="text-left font-medium px-3 py-2 whitespace-nowrap border-b border-border">
-                {c.name}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {shown.map((row, i) => (
-            <tr key={i} className="odd:bg-surface even:bg-surface-2/40">
-              {cols.map((c) => {
-                const val = row[c.idx] ?? "";
-                const display = val === "na" || val === "" ? "—" : val;
-                return (
-                  <td
-                    key={c.name}
-                    className={`px-3 py-1.5 align-top border-b border-border-soft ${
-                      c.name === "assembly_accession" || c.name === "asm_name"
-                        ? "font-mono"
-                        : ""
-                    } ${c.name === "organism_name" ? "italic" : ""}`}>
-                    {display}
-                  </td>
-                );
-              })}
-            </tr>
-          ))}
-        </tbody>
+        <thead><tr className="bg-surface-2 text-fg-muted">{shown.map(c =>
+          <th key={c.name} scope="col" className="text-left font-medium px-3 py-2 whitespace-nowrap border-b border-border">{c.name}</th>
+        )}</tr></thead>
+        <tbody>{result.rows.map((row, i) => <tr key={i} className="odd:bg-surface even:bg-surface-2/40">
+          {shown.map(c => <td key={c.name} className={`px-3 py-1.5 align-top border-b border-border-soft ${c.name === "organism_name" ? "italic" : ""}`}>
+            {!row[c.idx] || row[c.idx] === "na" ? "—" : row[c.idx]}
+          </td>)}
+        </tr>)}</tbody>
       </table>
-      {rows.length > MAX_PREVIEW_ROWS && (
-        <div className="px-3 py-2 text-[11px] text-fg-subtle bg-surface-2 border-t border-border">
-          Showing first {MAX_PREVIEW_ROWS} of {rows.length} rows — the download
-          contains all of them, with every column.
-        </div>
-      )}
     </div>
-  );
+    {shown.length === 0 && <p className="text-xs text-fg-muted">Select a column above to display the table.</p>}
+  </div>;
 }
