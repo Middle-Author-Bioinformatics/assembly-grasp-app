@@ -49,7 +49,7 @@ def _lines(key, etag=None):
     obj = s3.get_object(**args)
     with io.TextIOWrapper(obj["Body"], encoding="utf-8-sig", errors="strict", newline="") as stream:
         for line in stream:
-            yield line.rstrip("\r\n")
+            yield line.rstrip("\r\n").lstrip("\ufeff")
 
 
 @lru_cache(maxsize=1)
@@ -263,17 +263,30 @@ def lambda_handler(event, context):
                 raise RequestError("Search needs more time. Enable the chunk index or increase the Lambda timeout.", 503)
             # closing also closes the S3 body if a result-size limit interrupts iteration.
             with closing(_lines(key, None if MANIFEST_KEY else dataset_id)) as lines:
-                first = True
+                identity_order = list(range(len(columns)))
+                input_order = identity_order
                 for line in lines:
-                    if not line or line.startswith("#"):
+                    if not line:
                         continue
                     cells = line.split("\t")
-                    if first and cells == columns:  # unprefixed input header
-                        first = False
+                    if line.startswith("#"):
+                        candidate = [c.strip() for c in line.lstrip("#").strip().split("\t")]
+                        if "assembly_accession" not in candidate and "organism_name" not in candidate:
+                            continue
+                    elif "assembly_accession" in cells and "organism_name" in cells:
+                        candidate = [c.strip() for c in cells]
+                    else:
+                        candidate = None
+                    if candidate is not None:
+                        if len(candidate) != len(set(candidate)) or set(candidate) != set(columns):
+                            raise RuntimeError("Incompatible assembly header in dataset")
+                        input_order = [candidate.index(c) for c in columns]
                         continue
-                    first = False
                     if len(cells) != len(columns):
                         raise RuntimeError("Malformed row in assembly dataset")
+                    if input_order != identity_order:
+                        cells = [cells[i] for i in input_order]
+                        line = "\t".join(cells)
                     scanned += 1
                     if scanned % 4096 == 0 and context and context.get_remaining_time_in_millis() < 2000:
                         raise RequestError("Search needs more time. Enable the chunk index or increase the Lambda timeout.", 503)
@@ -313,3 +326,4 @@ def lambda_handler(event, context):
         import traceback
         traceback.print_exc()
         return _json(502, {"error": "Could not read the assembly dataset. Check the Lambda logs and dataset configuration."})
+

@@ -3,7 +3,9 @@
 
 Python >=3.8, standard library only; accepts .tsv, .txt, .gz, or stdin (-).
 The source is never changed. Output must not already exist. Each chunk has
-the original comments/header and every original column. Unsorted input is OK.
+the initial comments/header and every original column. Unsorted input is OK.
+Concatenated sections may repeat headers or reorder the same columns. Later
+comments are retained in manifest.json rather than copied into every chunk.
 Publish the whole output under a NEW S3 prefix, with manifest.json uploaded last.
 """
 import argparse
@@ -33,6 +35,17 @@ def open_input(source):
     return opener(source, "rt", encoding="utf-8-sig", newline="")
 
 
+def header_order(candidate, canonical, line_no):
+    """Validate each section's schema before mapping its rows to the first header."""
+    if len(candidate) != len(set(candidate)):
+        raise ValueError("Line %d: duplicate column names in section header" % line_no)
+    missing = sorted(set(canonical) - set(candidate))
+    added = sorted(set(candidate) - set(canonical))
+    if missing or added:
+        raise ValueError("Line %d: section header has incompatible columns; missing=%s; added=%s" % (line_no, missing, added))
+    return [candidate.index(name) for name in canonical]
+
+
 def prepare(source, destination, rows_per_chunk=20000,
             bytes_per_chunk=16 * 1024 * 1024, max_open_files=64):
     if min(rows_per_chunk, bytes_per_chunk, max_open_files) < 1:
@@ -47,6 +60,8 @@ def prepare(source, destination, rows_per_chunk=20000,
     facets = {}
     header = None
     comments = []
+    section_comments = []
+    source_header_count = 0
     prefix = b""
     total_rows = 0
 
@@ -62,12 +77,15 @@ def prepare(source, destination, rows_per_chunk=20000,
                 if not line:
                     continue
                 if header is None:
-                    candidate = line.lstrip("#").strip().split("\t")
+                    candidate = [c.strip() for c in line.lstrip("#").strip().split("\t")]
                     if "organism_name" in candidate and "assembly_accession" in candidate:
                         header = [c.strip() for c in candidate]
                         if len(header) != len(set(header)):
                             raise ValueError("Duplicate column names in header")
                         org_index = header.index("organism_name")
+                        identity_order = list(range(len(header)))
+                        input_order = identity_order
+                        source_header_count = 1
                         # Normalize the header to standard NCBI #header syntax.
                         prefix = ("\n".join(comments + ["#" + "\t".join(header)]) + "\n").encode("utf-8")
                         facets = {c: Counter() for c in FACET_COLUMNS if c in header}
@@ -77,11 +95,29 @@ def prepare(source, destination, rows_per_chunk=20000,
                     else:
                         raise ValueError("Line %d: expected a tab-separated header containing organism_name and assembly_accession" % line_no)
                     continue
-                if line.startswith("#"):
-                    raise ValueError("Line %d: unexpected comment/header after data began" % line_no)
                 cells = line.split("\t")
+                if line.startswith("#"):
+                    candidate = [c.strip() for c in line.lstrip("#").strip().split("\t")]
+                    if "assembly_accession" not in candidate and "organism_name" not in candidate:
+                        section_comments.append({"line": line_no, "after_rows": total_rows, "text": line})
+                        continue
+                elif "assembly_accession" in cells and "organism_name" in cells:
+                    candidate = [c.strip() for c in cells]
+                else:
+                    candidate = None
+                if candidate is not None:
+                    input_order = header_order(candidate, header, line_no)
+                    source_header_count += 1
+                    print("Line {:,}: accepted section header {}{}".format(
+                        line_no, source_header_count,
+                        " (columns remapped to the first header)" if input_order != identity_order else ""),
+                        file=sys.stderr, flush=True)
+                    continue
                 if len(cells) != len(header):
                     raise ValueError("Line %d: %d columns, expected %d (no rows were silently skipped)" % (line_no, len(cells), len(header)))
+                if input_order != identity_order:
+                    cells = [cells[i] for i in input_order]
+                    line = "\t".join(cells)
                 words = cells[org_index].casefold().split()
                 group_name = words[0] if words else ""
                 group = groups.get(group_name)
@@ -135,6 +171,8 @@ def prepare(source, destination, rows_per_chunk=20000,
             "grouping": "first casefolded whitespace-delimited organism_name token",
             "columns": header,
             "comments": comments,
+            "section_comments": section_comments,
+            "source_header_count": source_header_count,
             "total_rows": total_rows,
             "rows_per_chunk": rows_per_chunk,
             "bytes_per_chunk": bytes_per_chunk,
@@ -168,3 +206,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

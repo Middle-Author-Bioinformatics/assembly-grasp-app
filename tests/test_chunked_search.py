@@ -182,6 +182,72 @@ class ChunkTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(json.loads((self.root / "stdin-output/manifest.json").read_text())["total_rows"], len(self.data))
 
+    def combined_sections(self):
+        first, second = self.data[0], self.data[2]
+        text = (self.text + "## Additional source table\n#" + "\t".join(self.columns) + "\n" +
+                "\t".join(first) + "\n# Comment within data\n" +
+                "\ufeff" + "\t".join(reversed(self.columns)) + "\n" +
+                "\t".join(reversed(second)) + "\n")
+        return text, [first, second]
+
+    def test_repeated_headers_comments_and_reordered_sections(self):
+        text, appended = self.combined_sections()
+        source = self.root / "combined.tsv"
+        source.write_text(text, encoding="utf-8")
+        output = self.root / "combined-index"
+        with redirect_stderr(io.StringIO()):
+            manifest = prepare.prepare(str(source), output, rows_per_chunk=11, max_open_files=1)
+        recovered = []
+        for path in output.rglob("*.tsv"):
+            recovered.extend(line.split("\t") for line in path.read_text().splitlines() if not line.startswith("#"))
+        self.assertCountEqual(recovered, self.data + appended)
+        self.assertEqual(manifest["total_rows"], len(self.data) + 2)
+        self.assertEqual(manifest["source_header_count"], 3)
+        self.assertEqual(len(manifest["section_comments"]), 2)
+        self.assertEqual(source.read_text(), text)
+        self.fake.objects.update({"combined/" + str(p.relative_to(output)): p.read_bytes() for p in output.rglob("*") if p.is_file()})
+        self.api.MANIFEST_KEY = "combined/manifest.json"
+        self.api._manifest.cache_clear()
+        status, response = self.request(page_size=100)
+        self.assertEqual(status, 200)
+        self.assertEqual(response["total"], 128)
+        status, last = self.request(page=2, page_size=100)
+        self.assertEqual(last["rows"][-2:], appended)
+
+    def test_fallback_also_handles_concatenated_tables(self):
+        text, appended = self.combined_sections()
+        self.fake.objects["source.tsv"] = text.encode("utf-8")
+        self.api.MANIFEST_KEY = ""
+        status, response = self.request(page=2, page_size=100)
+        self.assertEqual(status, 200)
+        self.assertEqual(response["total"], 128)
+        self.assertEqual(response["rows"][-2:], appended)
+
+    def test_incompatible_section_headers_fail_without_partial_output(self):
+        for suffix, columns in [("changed", self.columns[:-1] + ["different_column"]),
+                                ("duplicate", self.columns + [self.columns[0]])]:
+            source = self.root / (suffix + ".tsv")
+            source.write_text(self.text + "#" + "\t".join(columns) + "\n")
+            output = self.root / (suffix + "-index")
+            with self.assertRaisesRegex(ValueError, "incompatible columns|duplicate column"):
+                prepare.prepare(str(source), output)
+            self.assertFalse(output.exists())
+
+    def test_column_label_as_a_data_value_is_preserved(self):
+        row = ["Geobacter sp.", "Contig", "GCA_marker", "1000", "organism_name"]
+        text = self.text + "\t".join(row) + "\n"
+        source = self.root / "label-value.tsv"
+        source.write_text(text)
+        with redirect_stderr(io.StringIO()):
+            manifest = prepare.prepare(str(source), self.root / "label-value-index")
+        self.assertEqual(manifest["total_rows"], len(self.data) + 1)
+        self.fake.objects["source.tsv"] = text.encode()
+        self.api.MANIFEST_KEY = ""
+        status, response = self.request(filters=[{"column": "isolate", "op": "eq", "value": "organism_name"}])
+        self.assertEqual(status, 200)
+        self.assertEqual(response["rows"], [row])
+
 
 if __name__ == "__main__":
     unittest.main()
+

@@ -21,13 +21,25 @@ header using `assembly_accession` and `organism_name`; column positions need
 not match NCBI's usual order. Standard commented and unprefixed headers are
 accepted. It preserves all data columns and rows, repeats comments/headers in
 each chunk, handles interleaved groups, and limits open output files to 64.
+Concatenated tables can repeat commented or unprefixed headers. If later
+headers contain the same columns in a different order, their data are remapped
+to the first header's column order. Later comments are preserved in the
+manifest's `section_comments` field, with source line and row positions,
+rather than repeated in every chunk. `source_header_count` records how many
+source headers were accepted. All assembly rows, including duplicates, remain.
 Default chunk limits are 20,000 rows or 16 MiB, whichever is reached first.
 Adjust with `--rows-per-chunk`, `--bytes-per-chunk`, and `--max-open-files`.
 
 The output directory must not already exist. Processing uses a temporary
 sibling directory and publishes the completed directory only on success.
-Malformed rows, duplicate columns, unexpected mid-file comments, or decoding
-errors stop the build rather than silently dropping data. A single oversized
+If a run ends with `ERROR`, its temporary chunks are removed and the requested
+output directory is not published. After fixing the cause, rerun the command
+from the beginning. Start the S3 upload only after the final `Prepared ...`
+message and a completed `manifest.json` are present.
+Malformed rows, duplicate columns, incompatible section schemas, or decoding
+errors stop the build rather than silently dropping data. Reordered headers
+are supported; headers with added or missing columns fail with the differences
+listed. A single oversized
 row requires a larger byte limit. Empty fields are retained. Missing organism
 names are retained under an empty-name group, but cannot be found by a named
 organism query. Grouping uses the leading name word, not a taxonomic hierarchy;
@@ -183,3 +195,4 @@ and page 2 continues with different records. Then test filters in the UI.
 - The tests use generated fixtures because no source TSV attachment was
   available during implementation. Validate one real dataset on TheBelly
   before publishing its index.
+
