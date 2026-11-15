@@ -166,27 +166,19 @@ body {
 .assembly-heading {
   display: grid;
   justify-items: center;
-  gap: 7px;
+  gap: 0;
   min-width: 0;
   text-align: center;
   border-radius: 8px;
 }
 .assembly-app-name {
   font-family: "Space Grotesk", "Inter", ui-sans-serif, system-ui, sans-serif;
-  font-size: clamp(30px, 3.2vw, 54px);
+  font-size: clamp(40px, 4.6vw, 76px);
   font-weight: 700;
+  color: #252539;
   line-height: 1.05;
   letter-spacing: -0.045em;
   white-space: nowrap;
-}
-.assembly-app-name > span {
-  color: rgb(var(--accent));
-}
-.assembly-app-description {
-  font-family: "JetBrains Mono", ui-monospace, monospace;
-  font-size: 10px;
-  line-height: 1.5;
-  color: rgb(var(--fg-subtle));
 }
 .assembly-header-actions {
   justify-self: end;
@@ -218,13 +210,19 @@ body {
     justify-self: center;
   }
   .assembly-app-name {
-    font-size: clamp(30px, 7vw, 42px);
-  }
-  .assembly-app-description {
-    font-size: 9px;
+    font-size: clamp(36px, 8vw, 48px);
+    white-space: normal;
+    text-wrap: balance;
   }
   .assembly-header-actions {
     grid-area: actions;
     max-width: 100%;
   }
 }
+
+/* Preserve the requested ink color with a readable backing in dark mode. */
+.dark .assembly-heading {
+  background: #fcfcfa;
+  padding: 12px 18px;
+}
+

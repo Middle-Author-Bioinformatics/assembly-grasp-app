@@ -4,17 +4,20 @@ export const AG_CONFIG = {
   bucket: (env.VITE_AG_BUCKET as string | undefined) || "assembly-grasp-bucket",
 };
 export const HAS_BACKEND = AG_CONFIG.apiBase !== "";
+export type SearchMode = "name" | "keyword";
 export type FilterOp = "eq" | "ne" | "contains" | "gte" | "lte" | "missing" | "present";
 export interface AssemblyFilter { column: string; op: FilterOp; value: string }
 export interface AssemblySchema {
   columns: string[]; facets: Record<string, string[]>; dataset_id: string; indexed: boolean;
+  search_modes?: SearchMode[];
 }
 export interface QueryResult {
   columns: string[]; rows: string[][]; total: number; page: number;
   page_size: number; pages: number; dataset_id: string; indexed: boolean; scanned: number;
+  search_mode?: SearchMode;
 }
 export interface SearchRequest {
-  query: string; filters: AssemblyFilter[]; page: number; page_size: number; dataset_id?: string;
+  query: string; search_mode: SearchMode; filters: AssemblyFilter[]; page: number; page_size: number; dataset_id?: string;
 }
 export class QueryError extends Error {
   constructor(message: string, public status: number) { super(message); }
@@ -48,6 +51,9 @@ export async function queryAssemblies(search: SearchRequest): Promise<QueryResul
   if (!Array.isArray(result.rows) || !Array.isArray(result.columns) || !Number.isInteger(result.total)) {
     throw new QueryError("Unexpected search response. Please try again.", 0);
   }
+  if (search.search_mode === "keyword" && result.search_mode !== "keyword") {
+    throw new QueryError("Update the search service before using keyword search.", 0);
+  }
   return result;
 }
 export function downloadFilename(raw: string): string {
@@ -69,3 +75,4 @@ export function downloadPage(result: QueryResult, query: string): void {
   const lines = ["#" + result.columns.join("\t"), ...result.rows.map(row => row.join("\t"))];
   downloadTsv(lines.join("\n") + "\n", downloadFilename(query).replace(/\.tsv$/, `-page-${result.page}.tsv`));
 }
+

@@ -21,8 +21,7 @@ export function Header({ onTitleClick }: Props) {
 
         <button type="button" onClick={onTitleClick}
           className="assembly-heading" aria-label="Assembly Grasp — back to top">
-          <span className="assembly-app-name">Assembly <span>Grasp</span></span>
-          <span className="assembly-app-description">NCBI genome assembly metadata extractor</span>
+          <span className="assembly-app-name">Assembly Grasp</span>
         </button>
 
         <div className="assembly-header-actions">
@@ -41,3 +40,4 @@ export function Header({ onTitleClick }: Props) {
     </header>
   );
 }
+
