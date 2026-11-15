@@ -140,3 +140,91 @@ body {
   border: 2px solid rgb(var(--bg));
 }
 *::-webkit-scrollbar-thumb:hover { background: rgb(var(--fg-faint)); }
+
+/* Full-width branding: equal side tracks keep the app title screen-centered. */
+.assembly-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: clamp(12px, 2vw, 32px);
+  width: 100%;
+  padding: 18px clamp(16px, 2vw, 32px);
+}
+.assembly-brand {
+  justify-self: start;
+  width: clamp(220px, 27vw, 420px);
+  max-width: 100%;
+  border-radius: 8px;
+}
+.assembly-brand-logo {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 8px;
+  background: white;
+}
+.assembly-heading {
+  display: grid;
+  justify-items: center;
+  gap: 7px;
+  min-width: 0;
+  text-align: center;
+  border-radius: 8px;
+}
+.assembly-app-name {
+  font-family: "Space Grotesk", "Inter", ui-sans-serif, system-ui, sans-serif;
+  font-size: clamp(30px, 3.2vw, 54px);
+  font-weight: 700;
+  line-height: 1.05;
+  letter-spacing: -0.045em;
+  white-space: nowrap;
+}
+.assembly-app-name > span {
+  color: rgb(var(--accent));
+}
+.assembly-app-description {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 10px;
+  line-height: 1.5;
+  color: rgb(var(--fg-subtle));
+}
+.assembly-header-actions {
+  justify-self: end;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.assembly-brand:focus-visible,
+.assembly-heading:focus-visible {
+  outline: 2px solid rgb(var(--accent));
+  outline-offset: 5px;
+}
+@media (max-width: 767px) {
+  .assembly-header {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas: "brand actions" "heading heading";
+    gap: 18px 12px;
+    padding: 16px;
+  }
+  .assembly-brand {
+    grid-area: brand;
+    width: min(66vw, 300px);
+  }
+  .assembly-heading {
+    grid-area: heading;
+    justify-self: center;
+  }
+  .assembly-app-name {
+    font-size: clamp(30px, 7vw, 42px);
+  }
+  .assembly-app-description {
+    font-size: 9px;
+  }
+  .assembly-header-actions {
+    grid-area: actions;
+    max-width: 100%;
+  }
+}
