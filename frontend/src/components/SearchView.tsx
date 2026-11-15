@@ -51,6 +51,21 @@ export function SearchView() {
     try { await downloadAll(active); } catch (e: any) { setError(e.message || String(e)); }
     finally { setExporting(false); }
   }
+  function pageNavigation(position: "top" | "bottom") {
+    if (!result) return null;
+    return (
+      <nav aria-label={`Result pages (${position})`} className="flex flex-wrap items-center gap-2 text-xs">
+        <button className="btn-ghost" disabled={busy || exporting || result.page <= 1} onClick={() => go(1)}>First</button>
+        <button className="btn-ghost" disabled={busy || exporting || result.page <= 1} onClick={() => go(result.page - 1)}>Previous</button>
+        <span>Page {result.page.toLocaleString()} of {result.pages.toLocaleString()}</span>
+        <button className="btn-ghost" disabled={busy || exporting || result.page >= result.pages} onClick={() => go(result.page + 1)}>Next</button>
+        <button className="btn-ghost" disabled={busy || exporting || result.page >= result.pages} onClick={() => go(result.pages)}>Last</button>
+        <label className="ml-auto flex items-center gap-2">Go to page <input aria-label={`Go to page (${position})`} className="field w-24" type="number" min={1} max={result.pages} value={pageInput}
+          disabled={busy || exporting} onChange={e => setPageInput(e.target.value)} onKeyDown={e => { if (e.key === "Enter") go(Number(pageInput)); }} /></label>
+        <button className="btn-ghost" disabled={busy || exporting || !/^\d+$/.test(pageInput) || Number(pageInput) < 1 || Number(pageInput) > result.pages} onClick={() => go(Number(pageInput))}>Go</button>
+      </nav>
+    );
+  }
   return <div className="space-y-6 animate-fade-in">
     <section className="panel overflow-hidden bg-radial-glow"><div className="px-6 py-7">
       <div className="text-xs uppercase tracking-[0.2em] text-accent font-medium">assembly metadata</div>
@@ -94,17 +109,9 @@ export function SearchView() {
       <div className="panel-bd space-y-4">
         {result.total === 0 ? <p className="text-sm text-fg-muted">No assemblies match this search and its filters.</p> : <>
           <div className="text-xs text-fg-muted" role="status">{busy ? "Loading results…" : `Showing ${((result.page - 1) * result.page_size + 1).toLocaleString()}–${Math.min(result.page * result.page_size, result.total).toLocaleString()} of ${result.total.toLocaleString()}`}</div>
+          {pageNavigation("top")}
           <ResultsTable result={result} />
-          <nav aria-label="Result pages" className="flex flex-wrap items-center gap-2 text-xs">
-            <button className="btn-ghost" disabled={busy || exporting || result.page <= 1} onClick={() => go(1)}>First</button>
-            <button className="btn-ghost" disabled={busy || exporting || result.page <= 1} onClick={() => go(result.page - 1)}>Previous</button>
-            <span>Page {result.page.toLocaleString()} of {result.pages.toLocaleString()}</span>
-            <button className="btn-ghost" disabled={busy || exporting || result.page >= result.pages} onClick={() => go(result.page + 1)}>Next</button>
-            <button className="btn-ghost" disabled={busy || exporting || result.page >= result.pages} onClick={() => go(result.pages)}>Last</button>
-            <label className="ml-auto flex items-center gap-2">Go to page <input aria-label="Go to page" className="field w-24" type="number" min={1} max={result.pages} value={pageInput}
-              disabled={busy || exporting} onChange={e => setPageInput(e.target.value)} onKeyDown={e => { if (e.key === "Enter") go(Number(pageInput)); }} /></label>
-            <button className="btn-ghost" disabled={busy || exporting || !/^\d+$/.test(pageInput) || Number(pageInput) < 1 || Number(pageInput) > result.pages} onClick={() => go(Number(pageInput))}>Go</button>
-          </nav>
+          {pageNavigation("bottom")}
         </>}
         <p className="text-[11px] text-fg-subtle">Downloads include every source column. Full downloads have a size limit; individual pages remain downloadable.</p>
       </div>

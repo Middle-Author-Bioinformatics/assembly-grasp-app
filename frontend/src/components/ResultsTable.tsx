@@ -1,7 +1,34 @@
 import { useState } from "react";
 import type { QueryResult } from "../lib/assembly-config";
 const DEFAULT_COLUMNS = ["assembly_accession", "organism_name", "infraspecific_name",
-  "assembly_level", "refseq_category", "seq_rel_date", "asm_name"];
+  "assembly_level", "refseq_category", "seq_rel_date", "asm_name",
+  "bioproject", "biosample", "genome_size", "genome_size_ungapped", "gc_percent",
+  "replicon_count", "scaffold_count", "contig_count", "annotation_provider",
+  "annotation_name", "annotation_date", "total_gene_count",
+  "protein_coding_gene_count", "non_coding_gene_count"];
+
+const NCBI_FIELDS: Record<string, { pattern: RegExp; base: string }> = {
+  assembly_accession: { pattern: /^GC[AF]_\d+(?:\.\d+)?$/i, base: "https://www.ncbi.nlm.nih.gov/datasets/genome/" },
+  bioproject: { pattern: /^PRJ(?:NA|EB|DB)\d+$/i, base: "https://www.ncbi.nlm.nih.gov/bioproject/" },
+  biosample: { pattern: /^SAM(?:N|EA|D)\d+$/i, base: "https://www.ncbi.nlm.nih.gov/biosample/" },
+};
+
+function cellValue(column: string, value: string | undefined) {
+  if (!value?.trim() || /^(na|n\/a)$/i.test(value.trim())) return "—";
+  const field = NCBI_FIELDS[column];
+  if (!field) return value;
+  // Preserve separators and text when a cell contains more than one accession.
+  return value.split(/([,;\s]+)/).map((part, i) =>
+    field.pattern.test(part) ? (
+      <a key={i} href={field.base + encodeURIComponent(part.toUpperCase()) + "/"}
+        target="_blank" rel="noopener noreferrer" title={`View ${part} on NCBI`}
+        className="text-accent underline decoration-accent/50 underline-offset-2 hover:decoration-accent">
+        {part}
+      </a>
+    ) : part
+  );
+}
+
 export function ResultsTable({ result }: { result: QueryResult }) {
   const [selection, setSelection] = useState<string[] | null>(null);
   const columns = result.columns;
@@ -29,7 +56,7 @@ export function ResultsTable({ result }: { result: QueryResult }) {
         )}</tr></thead>
         <tbody>{result.rows.map((row, i) => <tr key={i} className="odd:bg-surface even:bg-surface-2/40">
           {shown.map(c => <td key={c.name} className={`px-3 py-1.5 align-top border-b border-border-soft ${c.name === "organism_name" ? "italic" : ""}`}>
-            {!row[c.idx] || row[c.idx] === "na" ? "—" : row[c.idx]}
+            {cellValue(c.name, row[c.idx])}
           </td>)}
         </tr>)}</tbody>
       </table>
