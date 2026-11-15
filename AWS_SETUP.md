@@ -175,9 +175,9 @@ and page 2 continues with different records. Then test filters in the UI.
 
 ## Scope and performance
 
-- A nonempty organism query is still required. Filters apply across every
+- A nonempty organism-name or keyword query is required. Filters apply across every
   match for that query before the page is selected, not just the visible rows.
-- Unfiltered single-word queries use manifest counts to read only the chunk(s)
+- In Genus / species mode, unfiltered single-word queries use manifest counts to read only the chunk(s)
   needed for the requested page. Filters or species queries scan that entire
   group for exact totals on each request; large groups can still be slower.
 - The complete match set is not sent to the browser at once. Every record is
@@ -195,4 +195,81 @@ and page 2 continues with different records. Then test filters in the UI.
 - The tests use generated fixtures because no source TSV attachment was
   available during implementation. Validate one real dataset on TheBelly
   before publishing its index.
+
+## Optional keyword search across organism names
+
+`Genus / species` mode matches complete leading words in `organism_name`.
+`Keyword` mode matches a literal substring or phrase anywhere in that same
+column, ignoring capitalization and normalizing whitespace. For example,
+`phage` can match `Escherichia phage ...` and `... bacteriophage ...` in
+different prefix groups. It never searches other metadata columns implicitly.
+This is text matching, not NCBI taxonomy/synonym resolution. The early `Group`
+column shows the source classification; users can also filter it explicitly.
+
+Keyword search needs a separate compact SQLite catalog of normalized organism
+names and row pointers. Existing source chunks and manifest are left unchanged.
+No new database service or Python dependencies are needed.
+
+On TheBelly, from the repository root, build it from the existing local chunks:
+
+```bash
+python3 scripts/build_keyword_index.py \
+  --chunks-dir ~/databases/ncbi_chunks_20261114_v1 \
+  --outdir ~/databases/ncbi_keywords_20261115_v1
+```
+
+If using the standalone downloaded script in `~/databases`, replace
+`scripts/build_keyword_index.py` with `build_keyword_index.py`. The output
+directory must be new. The script validates the chunk row counts against the
+manifest, preserves duplicate records, and publishes output only on success.
+
+After the final `Prepared ...` message, upload the new keyword files:
+
+```bash
+aws s3 sync ~/databases/ncbi_keywords_20261115_v1/ \
+  s3://assembly-grasp-bucket/assembly-index/2026-11-14-v1/keyword-v1/ \
+  --region us-east-2
+```
+
+Deploy the updated `lambda/assembly_grasp.py` and add this environment variable
+alongside the existing `ASSEMBLY_MANIFEST_KEY`:
+
+```text
+ASSEMBLY_KEYWORD_INDEX_KEY=assembly-index/2026-11-14-v1/keyword-v1/organism_names.sqlite
+```
+
+The existing read policy on `assembly-index/*` also covers the keyword file.
+Keep every published keyword object immutable. A source dataset refresh needs
+a newly built keyword index with that dataset's UUID and a new object key.
+Mismatched datasets return 409 rather than silently returning wrong records.
+
+The first keyword query in each Lambda execution environment downloads this
+catalog into `/tmp`; subsequent requests in that environment reuse it. Check
+`index_bytes` in the generated `keyword_index.json`. Configure temporary
+(ephemeral) storage to exceed this size by at least 256 MiB; 2,048 MB is a
+reasonable starting allocation for many catalogs. Start with a 120-second
+timeout and benchmark a cold query on your actual data. A large catalog can
+require more temporary storage or time. Memory is separate from temporary
+storage; the SQLite page cache is bounded to about 32 MiB.
+
+Unfiltered keyword pages scan the local name catalog for exact totals, then
+retrieve only the assembly chunks containing the requested page's records.
+Keyword queries with additional column filters read all name-matching records
+to apply those filters before counting/paging, so very broad filtered searches
+can still take longer. Full TSV downloads retain the configured size limit.
+
+The schema API advertises `search_modes: ["name", "keyword"]` only when both
+index environment variables are configured. Until then, or with an older
+Lambda, the frontend keeps keyword mode disabled and scientific-name mode
+usable. Deploy Lambda/configure the keyword index before deploying this UI.
+
+Example request:
+
+```json
+{"query":"phage","search_mode":"keyword","format":"json","page":1,"page_size":50}
+```
+
+`search_mode` defaults to `name` for compatibility with existing clients.
+The UI pins the chosen mode across page navigation and full TSV downloads.
+
 

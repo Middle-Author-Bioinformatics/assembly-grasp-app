@@ -8,12 +8,19 @@ browse every matching record in pages. Genome sequences are not downloaded.
 - Organism matching compares complete leading words, ignoring capitalization.
   `Geobacter` matches all names starting with that word; `Geobacter
   sulfurreducens` selects that species and its named strains.
+- The search-mode toggle also offers keyword/phrase matching anywhere in
+  `organism_name`, including viral names that contain a host genus. Keyword
+  mode uses an optional SQLite name/row-pointer catalog built from existing
+  chunks by `scripts/build_keyword_index.py`; see the keyword setup section
+  of [AWS_SETUP.md](AWS_SETUP.md). It does not imply taxonomy-based matching.
 - Any source column can be filtered with equality, inequality, text contains,
   numeric minimum/maximum, or missing/present checks. Conditions are combined
   with AND. Numeric comparisons exclude missing and non-finite values.
 - Results use server-side pagination: 25, 50, or 100 records per page, with
   first/previous/next/last controls and page-number entry. Column visibility can
   be changed independently of filtering and downloads.
+- `Group` is shown next to the organism name so source categories such as viral
+  records are visible without scrolling to the end of the table.
 - Download the current page with every source column, or download all filtered
   matches as one TSV (subject to the configured response-size cap).
 - The source remains a snapshot supplied by the owner; no automatic NCBI
@@ -35,7 +42,7 @@ word (usually genus) and subdivides large groups into bounded chunks. A
 manifest records the schema, chunk paths, counts, and common categorical
 values. The source does not need to be sorted.
 
-With `ASSEMBLY_MANIFEST_KEY` configured, Lambda reads only the requested group.
+In scientific-name mode, with `ASSEMBLY_MANIFEST_KEY` configured, Lambda reads only the requested group.
 Unfiltered single-word searches can jump directly to a page using manifest row
 counts. Filtered and species searches scan that group's chunks to compute exact
 totals, so large groups can still take longer. No query cache is used.
@@ -89,3 +96,4 @@ returns all filtered matches up to `MAX_RESULT_BYTES`. Omitting `format` retains
 the original TSV API, including GET `?query=Geobacter`.
 
 © 2026 Middle Author Bioinformatics · For research and educational use only.
+
