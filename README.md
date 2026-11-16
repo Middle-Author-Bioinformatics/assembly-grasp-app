@@ -16,6 +16,13 @@ browse every matching record in pages. Genome sequences are not downloaded.
 - Any source column can be filtered with equality, inequality, text contains,
   numeric minimum/maximum, or missing/present checks. Conditions are combined
   with AND. Numeric comparisons exclude missing and non-finite values.
+- Optional BioProject enrichment adds the study title and description beside
+  each BioProject link. Descriptions expand in the table and remain complete
+  in TSV downloads. **BioProject text** search finds a keyword/phrase in titles
+  or descriptions across organisms, with the same filters and pagination.
+  Build the enriched chunks with `scripts/enrich_bioprojects.py`, then build a
+  new keyword catalog; see the BioProject section in [AWS_SETUP.md](AWS_SETUP.md).
+  Metadata comes from an NCBI bulk XML snapshot, with no live per-query calls.
 - Results use server-side pagination: 25, 50, or 100 records per page, with
   first/previous/next/last controls and page-number entry. Column visibility can
   be changed independently of filtering and downloads.
@@ -33,7 +40,9 @@ browse every matching record in pages. Genome sequences are not downloaded.
 | Frontend | `frontend/` | React, Vite, TypeScript, Tailwind; hosted on Amplify |
 | Search API | `lambda/assembly_grasp.py` | S3-backed filtering and pagination via a Lambda Function URL |
 | Preprocessor | `scripts/prepare_assembly_chunks.py` | Standard-library Python splitter for TheBelly or other Linux hosts |
-| Tests | `tests/test_chunked_search.py` | Offline integration checks with generated NCBI-style fixtures |
+| BioProject enrichment | `scripts/enrich_bioprojects.py` | Stream bulk NCBI XML and add project text to a new copy of the chunks |
+| Keyword catalog | `scripts/build_keyword_index.py` | Index organism names and optional deduplicated project text |
+| Tests | `tests/` | Offline integration checks with generated NCBI-style fixtures |
 
 ## Fast indexed searches
 

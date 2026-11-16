@@ -4,7 +4,7 @@ export const AG_CONFIG = {
   bucket: (env.VITE_AG_BUCKET as string | undefined) || "assembly-grasp-bucket",
 };
 export const HAS_BACKEND = AG_CONFIG.apiBase !== "";
-export type SearchMode = "name" | "keyword";
+export type SearchMode = "name" | "keyword" | "bioproject";
 export type FilterOp = "eq" | "ne" | "contains" | "gte" | "lte" | "missing" | "present";
 export interface AssemblyFilter { column: string; op: FilterOp; value: string }
 export interface AssemblySchema {
@@ -51,7 +51,7 @@ export async function queryAssemblies(search: SearchRequest): Promise<QueryResul
   if (!Array.isArray(result.rows) || !Array.isArray(result.columns) || !Number.isInteger(result.total)) {
     throw new QueryError("Unexpected search response. Please try again.", 0);
   }
-  if (search.search_mode === "keyword" && result.search_mode !== "keyword") {
+  if (search.search_mode !== "name" && result.search_mode !== search.search_mode) {
     throw new QueryError("Update the search service before using keyword search.", 0);
   }
   return result;

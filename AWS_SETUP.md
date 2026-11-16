@@ -272,4 +272,130 @@ Example request:
 `search_mode` defaults to `name` for compatibility with existing clients.
 The UI pins the chosen mode across page navigation and full TSV downloads.
 
+## BioProject titles, descriptions, and keyword search
+
+The optional enrichment adds `bioproject_title` and `bioproject_description`
+to every assembly row. The dashboard shows them beside the BioProject link;
+long descriptions expand with **Read more**. Page and full TSV downloads
+include the full plain text. These fields also appear in the filter editor.
+**BioProject text** mode searches a case-insensitive literal substring/phrase
+in either field across all indexed assemblies. It does not require an organism
+query. For example, search `antibiotic resistance`, then add an `organism_name`
+filter to narrow the results. Alternatively, use Genus / species mode and add
+`bioproject_description` → `contains` → `methicillin`.
+
+This is project-level context, not sample-level metadata or confirmation that
+every genome has a phenotype mentioned in the study. Missing/unavailable
+projects or descriptions remain blank; no text is inferred from umbrella
+projects. When a row lists multiple projects, values are labeled by accession.
+XML-encoded HTML is converted to plain text and whitespace normalized. The
+metadata is a snapshot, not a live lookup each time a user searches.
+
+### Prepare on TheBelly
+
+After merging/pulling this change, run these commands **from the repository
+root**. If using the standalone scripts downloaded to `~/databases`, run there
+and remove `scripts/` from each script path. The source chunk directory is the
+one you already prepared; you do not need to split the original TSV again.
+
+Download NCBI's bulk XML once. It is several GB (about 3.9 GB at implementation)
+and is publicly available from the [BioProject FTP directory](https://ftp.ncbi.nlm.nih.gov/bioproject/).
+The download command resumes an interrupted transfer. Do not use a previously
+downloaded XML file as a resume target for a different NCBI snapshot.
+
+```bash
+curl -fL --retry 5 -C - \
+  https://ftp.ncbi.nlm.nih.gov/bioproject/bioproject.xml \
+  -o ~/databases/bioproject_20261116.xml
+```
+
+Once the download succeeds, prepare a **new** enriched dataset:
+
+```bash
+python3 scripts/enrich_bioprojects.py \
+  --chunks-dir ~/databases/ncbi_chunks_20261114_v1 \
+  --bioproject-xml ~/databases/bioproject_20261116.xml \
+  --outdir ~/databases/ncbi_chunks_bioproject_20261116_v1
+```
+
+The script streams XML, builds a reusable SQLite cache beside it, then writes
+a new copy of the chunks with two appended columns. Python 3.8+ and its standard
+library are sufficient. Original XML, chunks, manifest, and assembly rows are
+preserved. A new dataset UUID ensures browsers and Lambda cannot mix old/new
+data. A failed preparation does not publish a partial output directory. The
+local cache is reused if the XML path, size, and modification time match;
+otherwise choose a new `--cache-db` path. Allow disk space for the XML, its
+SQLite cache, enriched chunks, and keyword catalog. Enriched chunks can be
+larger than the original splitter's byte limit because descriptions are added.
+
+Review `bioproject_enrichment.json` for matched row counts and
+`missing_bioprojects.txt` for project accessions absent from the XML snapshot.
+An absent description is valid; it does not block publishing.
+
+Build the updated keyword catalog **from the enriched chunks**, not the old
+chunks. This version stores distinct project text once and links assembly row
+pointers to it, alongside the existing organism-name catalog:
+
+```bash
+python3 scripts/build_keyword_index.py \
+  --chunks-dir ~/databases/ncbi_chunks_bioproject_20261116_v1 \
+  --outdir ~/databases/ncbi_keywords_bioproject_20261116_v1
+```
+
+### Upload and activate
+
+Use a new S3 prefix. Run each command only after the previous one succeeds:
+
+```bash
+aws s3 sync ~/databases/ncbi_chunks_bioproject_20261116_v1/ \
+  s3://assembly-grasp-bucket/assembly-index/2026-11-16-bioproject-v1/ \
+  --exclude 'manifest.json' --region us-east-2
+
+aws s3 sync ~/databases/ncbi_keywords_bioproject_20261116_v1/ \
+  s3://assembly-grasp-bucket/assembly-index/2026-11-16-bioproject-v1/keyword-v1/ \
+  --region us-east-2
+
+aws s3 cp ~/databases/ncbi_chunks_bioproject_20261116_v1/manifest.json \
+  s3://assembly-grasp-bucket/assembly-index/2026-11-16-bioproject-v1/manifest.json \
+  --region us-east-2
+```
+
+Deploy the updated `lambda/assembly_grasp.py` separately from Amplify. Then
+update these **two existing** Lambda environment variables together, preserving
+all other variables:
+
+```text
+ASSEMBLY_MANIFEST_KEY=assembly-index/2026-11-16-bioproject-v1/manifest.json
+ASSEMBLY_KEYWORD_INDEX_KEY=assembly-index/2026-11-16-bioproject-v1/keyword-v1/organism_names.sqlite
+```
+
+The existing `s3:GetObject` policy on `assembly-index/*` covers both. Check the
+new catalog's `index_bytes` in `keyword_index.json` and size Lambda ephemeral
+storage to fit it plus at least 256 MiB. The first keyword request per Lambda
+environment downloads the catalog; warm requests reuse it. Benchmark a cold
+query and a broad filtered query before rollout. Exact counts with additional
+metadata filters can still require reading many matching chunks; full exports
+retain the size cap. No full XML is downloaded by Lambda.
+
+Smoke tests (replace `YOUR_FUNCTION_URL`):
+
+```bash
+curl -sS YOUR_FUNCTION_URL -H 'Content-Type: application/json' \
+  -d '{"operation":"schema"}'
+
+curl -sS YOUR_FUNCTION_URL -H 'Content-Type: application/json' \
+  -d '{"query":"methicillin","search_mode":"bioproject","format":"json","page_size":25}'
+```
+
+Confirm `columns` includes both new fields, schema `search_modes` contains
+`bioproject`, and the result reports `search_mode: "bioproject"`. Check page 2,
+an organism filter, and a TSV download. The UI disables BioProject mode until
+the schema advertises it. Existing organism searches remain usable on the old
+dataset. To roll back a dataset change, restore both old index keys together.
+Keep all published prefixes immutable.
+
+NCBI references: [bulk download](https://ftp.ncbi.nlm.nih.gov/bioproject/),
+[BioProject XML schema](https://www.ncbi.nlm.nih.gov/data_specs/schema/other/bioproject/Core.xsd),
+and [BioProject help](https://www.ncbi.nlm.nih.gov/books/NBK54015/).
+
 

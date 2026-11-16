@@ -3,7 +3,8 @@
 ASSEMBLY_MANIFEST_KEY enables the index built by prepare_assembly_chunks.py.
 Without it, the original ASSEMBLY_KEY is scanned (functional, but slower).
 ASSEMBLY_KEYWORD_INDEX_KEY optionally points to a SQLite name/row-pointer
-catalog built from the same manifest by build_keyword_index.py.
+catalog built from the same manifest by build_keyword_index.py, including
+deduplicated BioProject text when chunks were enriched by enrich_bioprojects.py.
 CORS is managed exclusively by the Lambda Function URL configuration.
 """
 import base64
@@ -76,7 +77,7 @@ def _manifest():
 def _source(query, search_mode="name"):
     if MANIFEST_KEY:
         manifest = _manifest()
-        if search_mode == "keyword":
+        if search_mode in ("keyword", "bioproject"):
             return manifest, []
         words = query.casefold().split()
         group = manifest["groups"].get(words[0]) if words else None
@@ -115,7 +116,7 @@ def _check_time(context):
         raise RequestError("Search needs more time. Increase the Lambda timeout or narrow the search.", 503)
 
 
-def _keyword_database(meta, context):
+def _keyword_database(meta, context, search_mode="keyword"):
     if not MANIFEST_KEY or not KEYWORD_INDEX_KEY:
         raise RequestError("Keyword search is not enabled for this dataset yet.", 501)
     fingerprint = hashlib.sha256((KEYWORD_INDEX_KEY + meta["dataset_id"]).encode()).hexdigest()[:24]
@@ -146,6 +147,8 @@ def _keyword_database(meta, context):
         metadata = dict(conn.execute("SELECT key, value FROM metadata"))
         if metadata.get("schema_version") != "1" or metadata.get("dataset_id") != meta["dataset_id"] or json.loads(metadata.get("columns", "null")) != meta["columns"]:
             raise RequestError("Keyword index does not match this dataset. Rebuild the keyword index.", 409)
+        if search_mode == "bioproject" and "bioproject" not in json.loads(metadata.get("search_modes", "[]")):
+            raise RequestError("Rebuild the keyword index to enable BioProject text search.", 409)
         if context:
             conn.set_progress_handler(lambda: int(context.get_remaining_time_in_millis() < 2000), 10000)
         return conn
@@ -185,7 +188,7 @@ def _keyword_rows(pointers, columns, context, stats):
             raise RuntimeError("Keyword index row pointer does not match the chunk")
 
 
-def _keyword_search(meta, query, rules, fmt, page, page_size, context):
+def _keyword_search(meta, query, rules, fmt, page, page_size, context, search_mode="keyword"):
     rows = []
     stats = {"chunks": 0, "scanned": 0}
     start, end = (page - 1) * page_size, page * page_size
@@ -196,10 +199,14 @@ def _keyword_search(meta, query, rules, fmt, page, page_size, context):
         output.write(prefix)
     needle = " ".join(query.casefold().split())
     try:
-        with closing(_keyword_database(meta, context)) as conn:
-            sql = "SELECT c.key, n.row_no FROM names n JOIN chunks c ON n.chunk_id=c.id WHERE instr(n.name, ?) > 0 ORDER BY n.chunk_id, n.row_no"
+        with closing(_keyword_database(meta, context, search_mode)) as conn:
+            # The project text is stored once per distinct title/description.
+            # IN builds the matching project-id set, then uses names_by_project.
+            predicate = ("n.project_id IN (SELECT id FROM projects WHERE instr(text, ?) > 0)"
+                         if search_mode == "bioproject" else "instr(n.name, ?) > 0")
+            sql = "SELECT c.key, n.row_no FROM names n JOIN chunks c ON n.chunk_id=c.id WHERE " + predicate + " ORDER BY n.chunk_id, n.row_no"
             if not rules and fmt == "json":
-                total = conn.execute("SELECT count(*) FROM names WHERE instr(name, ?) > 0", (needle,)).fetchone()[0]
+                total = conn.execute("SELECT count(*) FROM names n WHERE " + predicate, (needle,)).fetchone()[0]
                 pointers = conn.execute(sql + " LIMIT ? OFFSET ?", (needle, page_size, start))
                 with closing(_keyword_rows(pointers, meta["columns"], context, stats)) as selected:
                     rows = [cells for cells, _ in selected]
@@ -222,13 +229,13 @@ def _keyword_search(meta, query, rules, fmt, page, page_size, context):
         if "interrupted" in str(exc).lower():
             raise RequestError("Keyword search needs more time. Increase the Lambda timeout or narrow the search.", 503) from exc
         raise
-    print(json.dumps({"msg": "query_done", "search_mode": "keyword", "query": query, "matches": total, **stats}))
+    print(json.dumps({"msg": "query_done", "search_mode": search_mode, "query": query, "matches": total, **stats}))
     if fmt == "json":
         return _json(200, {"columns": meta["columns"], "rows": rows, "total": total,
                            "page": page, "page_size": page_size,
                            "pages": max(1, (total + page_size - 1) // page_size),
                            "dataset_id": meta["dataset_id"], "indexed": True,
-                           "search_mode": "keyword", "scanned": stats["scanned"]})
+                           "search_mode": search_mode, "scanned": stats["scanned"]})
     if not total:
         return _json(404, {"error": "No assemblies match this search and filters"})
     filename = (re.sub(r"[^A-Za-z0-9._-]+", "_", query).strip("_") or "assemblies") + ".tsv"
@@ -368,31 +375,38 @@ def lambda_handler(event, context):
         query = " ".join(str(body.get("query") or body.get("q") or "").split())
         schema_only = body.get("operation") == "schema"
         if not schema_only and not query:
-            raise RequestError("Enter a genus or an organism name")
+            raise RequestError("Enter an organism name or a search keyword")
         if len(query) > 200:
             raise RequestError("Query too long")
         search_mode = body.get("search_mode", "name")
-        if search_mode not in ("name", "keyword"):
-            raise RequestError("search_mode must be name or keyword")
-        if not schema_only and search_mode == "keyword" and (not MANIFEST_KEY or not KEYWORD_INDEX_KEY):
+        if search_mode not in ("name", "keyword", "bioproject"):
+            raise RequestError("search_mode must be name, keyword, or bioproject")
+        if not schema_only and search_mode in ("keyword", "bioproject") and (not MANIFEST_KEY or not KEYWORD_INDEX_KEY):
             raise RequestError("Keyword search is not enabled for this dataset yet.", 501)
         meta, keys = _source(query, search_mode)
         columns = meta["columns"]
         dataset_id = meta["dataset_id"]
+        modes = ["name"]
+        if MANIFEST_KEY and KEYWORD_INDEX_KEY:
+            modes.append("keyword")
+            if {"bioproject_title", "bioproject_description"}.issubset(columns):
+                modes.append("bioproject")
         if body.get("dataset_id") and body["dataset_id"] != dataset_id:
             raise RequestError("Dataset changed. Run a new search.", 409)
         if schema_only:
             return _json(200, {"columns": columns, "facets": meta.get("facets", {}),
                                "dataset_id": dataset_id, "indexed": bool(MANIFEST_KEY),
-                               "search_modes": ["name", "keyword"] if MANIFEST_KEY and KEYWORD_INDEX_KEY else ["name"]})
+                               "search_modes": modes})
+        if search_mode == "bioproject" and "bioproject" not in modes:
+            raise RequestError("BioProject text search is not enabled for this dataset yet.", 501)
         rules = _filters(body.get("filters", []), columns)
         fmt = body.get("format", "tsv")
         if fmt not in ("json", "tsv"):
             raise RequestError("format must be json or tsv")
         page = _integer(body.get("page"), 1, 1, 100000000, "page")
         page_size = _integer(body.get("page_size"), 50, 1, 100, "page_size")
-        if search_mode == "keyword":
-            return _keyword_search(meta, query, rules, fmt, page, page_size, context)
+        if search_mode in ("keyword", "bioproject"):
+            return _keyword_search(meta, query, rules, fmt, page, page_size, context, search_mode)
         start, end = (page - 1) * page_size, page * page_size
         org_idx = columns.index("organism_name")
         q_words = query.casefold().split()

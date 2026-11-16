@@ -2,7 +2,7 @@ import { useState } from "react";
 import type { QueryResult } from "../lib/assembly-config";
 const DEFAULT_COLUMNS = ["assembly_accession", "organism_name", "group", "infraspecific_name",
   "assembly_level", "refseq_category", "seq_rel_date", "asm_name",
-  "bioproject", "biosample", "genome_size", "genome_size_ungapped", "gc_percent",
+  "bioproject", "bioproject_title", "bioproject_description", "biosample", "genome_size", "genome_size_ungapped", "gc_percent",
   "replicon_count", "scaffold_count", "contig_count", "annotation_provider",
   "annotation_name", "annotation_date", "total_gene_count",
   "protein_coding_gene_count", "non_coding_gene_count"];
@@ -15,6 +15,15 @@ const NCBI_FIELDS: Record<string, { pattern: RegExp; base: string }> = {
 
 function cellValue(column: string, value: string | undefined) {
   if (!value?.trim() || /^(na|n\/a)$/i.test(value.trim())) return "—";
+  if (column === "bioproject_description" && value.length > 180) return (
+    <details className="min-w-[18rem] max-w-md">
+      <summary className="cursor-pointer text-fg-muted">{value.slice(0, 180)}… <span className="text-accent underline">Read more</span></summary>
+      <p className="mt-2 whitespace-normal break-words leading-relaxed">{value}</p>
+    </details>
+  );
+  if (column === "bioproject_title" || column === "bioproject_description") {
+    return <span className="block min-w-[14rem] max-w-md whitespace-normal break-words">{value}</span>;
+  }
   const field = NCBI_FIELDS[column];
   if (!field) return value;
   // Preserve separators and text when a cell contains more than one accession.
@@ -33,7 +42,7 @@ export function ResultsTable({ result }: { result: QueryResult }) {
   const [selection, setSelection] = useState<string[] | null>(null);
   const columns = result.columns;
   const selected = selection ?? DEFAULT_COLUMNS.filter(c => columns.includes(c));
-  const leading = ["assembly_accession", "organism_name", "group"];
+  const leading = ["assembly_accession", "organism_name", "group", "bioproject", "bioproject_title", "bioproject_description"];
   const displayColumns = [...leading.filter(c => columns.includes(c)), ...columns.filter(c => !leading.includes(c))];
   const shown = displayColumns.map(name => ({ name, idx: columns.indexOf(name) })).filter(c => selected.includes(c.name));
   return <div className="space-y-3">
@@ -54,7 +63,7 @@ export function ResultsTable({ result }: { result: QueryResult }) {
     <div className="overflow-x-auto rounded-lg border border-border" role="region" aria-label="Assembly results" tabIndex={0}>
       <table className="w-full text-xs border-collapse">
         <thead><tr className="bg-surface-2 text-fg-muted">{shown.map(c =>
-          <th key={c.name} scope="col" className="text-left font-medium px-3 py-2 whitespace-nowrap border-b border-border">{c.name === "group" ? "Group" : c.name}</th>
+          <th key={c.name} scope="col" className="text-left font-medium px-3 py-2 whitespace-nowrap border-b border-border">{({ group: "Group", bioproject_title: "BioProject title", bioproject_description: "BioProject description" } as Record<string, string>)[c.name] ?? c.name}</th>
         )}</tr></thead>
         <tbody>{result.rows.map((row, i) => <tr key={i} className="odd:bg-surface even:bg-surface-2/40">
           {shown.map(c => <td key={c.name} className={`px-3 py-1.5 align-top border-b border-border-soft ${c.name === "organism_name" ? "italic" : ""}`}>

@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
-"""Build a small organism-name/row-pointer SQLite index from existing chunks.
+"""Build an organism-name/row-pointer and optional BioProject SQLite index.
 
 Python 3.8+; standard library only. Does not rewrite the manifest or chunks.
 Upload the finished output under a NEW S3 prefix and configure Lambda's
 ASSEMBLY_KEYWORD_INDEX_KEY with the key of organism_names.sqlite.
+Enriched chunks automatically enable deduplicated BioProject title/description
+search; the file name stays the same for compatibility.
 """
 import argparse
 from datetime import datetime, timezone
+from functools import lru_cache
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -22,6 +25,7 @@ def build(chunks_dir, outdir):
     columns = manifest["columns"]
     if manifest.get("schema_version") != 1 or "organism_name" not in columns:
         raise ValueError("Unsupported chunk manifest")
+    project_columns = [columns.index(c) for c in ("bioproject_title", "bioproject_description") if c in columns]
     outdir = Path(outdir).expanduser().resolve()
     if outdir.exists():
         raise ValueError("Output already exists; choose a new directory: %s" % outdir)
@@ -45,6 +49,21 @@ def build(chunks_dir, outdir):
             ("schema_version", "1"), ("dataset_id", manifest["dataset_id"]),
             ("columns", json.dumps(columns)),
         ])
+        modes = ["name", "keyword"]
+        if project_columns:
+            modes.append("bioproject")
+            conn.executescript("""
+                ALTER TABLE names ADD COLUMN project_id INTEGER;
+                CREATE TABLE projects (id INTEGER PRIMARY KEY, text TEXT NOT NULL UNIQUE);
+            """)
+        conn.execute("INSERT INTO metadata VALUES ('search_modes', ?)", (json.dumps(modes),))
+
+        @lru_cache(maxsize=32768)
+        def project_id(text):
+            conn.execute("INSERT OR IGNORE INTO projects (text) VALUES (?)", (text,))
+            return conn.execute("SELECT id FROM projects WHERE text=?", (text,)).fetchone()[0]
+
+        insert = "INSERT INTO names VALUES (?, ?, ?, ?)" if project_columns else "INSERT INTO names VALUES (?, ?, ?)"
         org_idx = columns.index("organism_name")
         batch = []
         for group in manifest["groups"].values():
@@ -67,27 +86,37 @@ def build(chunks_dir, outdir):
                         if len(cells) != len(columns):
                             raise ValueError("Malformed data row in %s" % key)
                         name = " ".join(cells[org_idx].casefold().split())
-                        batch.append((chunk_id, row_no, name))
+                        row = (chunk_id, row_no, name)
+                        if project_columns:
+                            # A newline separates fields: phrases never match
+                            # across the end of a title and start of a description.
+                            text = "\n".join(" ".join(cells[i].casefold().split()) for i in project_columns)
+                            row += (project_id(text),)
+                        batch.append(row)
                         row_no += 1
                         total += 1
                         if len(batch) == 5000:
-                            conn.executemany("INSERT INTO names VALUES (?, ?, ?)", batch)
+                            conn.executemany(insert, batch)
                             batch.clear()
                         if total % 100000 == 0:
                             print("Indexed {:,} organism names".format(total), file=sys.stderr, flush=True)
                 if row_no != chunk["rows"]:
                     raise ValueError("Row count differs from manifest for %s" % key)
         if batch:
-            conn.executemany("INSERT INTO names VALUES (?, ?, ?)", batch)
+            conn.executemany(insert, batch)
         if total != manifest["total_rows"]:
             raise ValueError("Total row count differs from manifest")
         conn.execute("INSERT INTO metadata VALUES ('total_rows', ?)", (str(total),))
+        if project_columns:
+            conn.execute("CREATE INDEX names_by_project ON names(project_id, chunk_id, row_no)")
+        project_id.cache_clear()
         conn.commit()
         conn.close()
         conn = None
         report = {"schema_version": 1, "dataset_id": manifest["dataset_id"],
                   "rows": total, "chunks": chunk_id, "index_file": database.name,
                   "index_bytes": database.stat().st_size,
+                  "search_modes": modes,
                   "created_at": datetime.now(timezone.utc).isoformat()}
         (staging / "keyword_index.json").write_text(json.dumps(report, indent=2) + "\n")
         os.replace(str(staging), str(outdir))

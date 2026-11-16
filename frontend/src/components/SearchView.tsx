@@ -30,9 +30,11 @@ export function SearchView() {
     return () => { cancelled = true; };
   }, [schemaRetry]);
   const keywordAvailable = schema?.search_modes?.includes("keyword") ?? false;
+  const bioprojectAvailable = schema?.search_modes?.includes("bioproject") ?? false;
+  const modeAvailable = searchMode === "name" || (searchMode === "keyword" ? keywordAvailable : bioprojectAvailable);
   const invalidFilter = filters.some(f => f.op !== "missing" && f.op !== "present" && !f.value.trim());
   const canSearch = HAS_BACKEND && !!schema && !busy && !exporting && !invalidFilter &&
-    (searchMode !== "keyword" || keywordAvailable) &&
+    modeAvailable &&
     !!query.trim() && query.length <= 200 && !/[\t\r\n]/.test(query);
   async function execute(search: SearchRequest) {
     setBusy(true); setError("");
@@ -72,28 +74,31 @@ export function SearchView() {
   return <div className="space-y-6 animate-fade-in">
     <section className="panel overflow-hidden bg-radial-glow"><div className="px-6 py-7">
       <h1 className="text-2xl md:text-3xl font-semibold tracking-tight">Grab NCBI assembly records by organism</h1>
-      <p className="mt-3 max-w-3xl text-sm text-fg-muted leading-relaxed">Search NCBI assembly metadata by organism name or keyword, filter the results, and browse or download matching records.</p>
+      <p className="mt-3 max-w-3xl text-sm text-fg-muted leading-relaxed">Search NCBI assembly metadata by organism or BioProject text, filter the results, and browse or download matching records.</p>
     </div></section>
     <section className="panel">
-      <div className="panel-hd flex items-center gap-2"><Dna size={14} className="text-accent" /><h2 className="text-sm font-semibold">Organism name</h2></div>
+      <div className="panel-hd flex items-center gap-2"><Dna size={14} className="text-accent" /><h2 className="text-sm font-semibold">Find assemblies</h2></div>
       <div className="panel-bd space-y-4">
         <fieldset className="flex flex-wrap items-center gap-x-5 gap-y-2 text-sm" disabled={busy || exporting}>
           <legend className="mb-2 text-xs text-fg-muted">Search mode</legend>
           <label className="inline-flex items-center gap-2 cursor-pointer"><input type="radio" name="search-mode" value="name" checked={searchMode === "name"} onChange={() => setSearchMode("name")} /> Genus / species</label>
-          <label className={`inline-flex items-center gap-2 ${keywordAvailable ? "cursor-pointer" : "opacity-50"}`}><input type="radio" name="search-mode" value="keyword" disabled={!keywordAvailable} checked={searchMode === "keyword"} onChange={() => setSearchMode("keyword")} /> Keyword</label>
+          <label className={`inline-flex items-center gap-2 ${keywordAvailable ? "cursor-pointer" : "opacity-50"}`}><input type="radio" name="search-mode" value="keyword" disabled={!keywordAvailable} checked={searchMode === "keyword"} onChange={() => setSearchMode("keyword")} /> Organism keyword</label>
+          <label className={`inline-flex items-center gap-2 ${bioprojectAvailable ? "cursor-pointer" : "opacity-50"}`}><input type="radio" name="search-mode" value="bioproject" disabled={!bioprojectAvailable} checked={searchMode === "bioproject"} onChange={() => setSearchMode("bioproject")} /> BioProject text</label>
           {schema && !keywordAvailable && <span className="text-xs text-fg-subtle">Keyword search is not available for this dataset yet.</span>}
+          {schema && !bioprojectAvailable && <span className="text-xs text-fg-subtle">BioProject text search is not available for this dataset yet.</span>}
         </fieldset>
         <div className="flex flex-col sm:flex-row gap-3">
-          <input aria-label="Organism name" className="field flex-1" value={query} disabled={busy || exporting}
-            onChange={e => setQuery(e.target.value)} onKeyDown={e => { if (e.key === "Enter") newSearch(); }} placeholder={searchMode === "keyword" ? "e.g. phage or virus" : "e.g. Geobacter sulfurreducens"} autoFocus />
+          <input aria-label={searchMode === "bioproject" ? "BioProject title or description keyword" : "Organism name"} className="field flex-1" value={query} disabled={busy || exporting}
+            onChange={e => setQuery(e.target.value)} onKeyDown={e => { if (e.key === "Enter") newSearch(); }} placeholder={searchMode === "bioproject" ? "e.g. antibiotic resistance" : searchMode === "keyword" ? "e.g. phage or virus" : "e.g. Geobacter sulfurreducens"} autoFocus />
           <button type="button" className="btn-primary" disabled={!canSearch} onClick={newSearch}>
             {busy ? <><Loader2 size={16} className="animate-spin" /> Searching…</> : <><Search size={16} /> Search &amp; view</>}
           </button>
         </div>
         <div className="flex flex-wrap items-center gap-2 text-xs"><span className="text-fg-subtle">Try:</span>
-          {(searchMode === "keyword" ? ["phage", "virus", "uncultured", "sulfurreducens"] : EXAMPLES).map(ex => <button key={ex} disabled={busy || exporting} className="pill border-border bg-surface-2 text-fg-muted font-mono" onClick={() => setQuery(ex)}>{ex}</button>)}
+          {(searchMode === "bioproject" ? ["antibiotic resistance", "soil", "microbiome", "clinical"] : searchMode === "keyword" ? ["phage", "virus", "uncultured", "sulfurreducens"] : EXAMPLES).map(ex => <button key={ex} disabled={busy || exporting} className="pill border-border bg-surface-2 text-fg-muted font-mono" onClick={() => setQuery(ex)}>{ex}</button>)}
         </div>
-        <p className="text-[11px] text-fg-subtle">{searchMode === "keyword" ? "Find a keyword or phrase anywhere in organism_name, ignoring capitalization." : "Match complete genus/species words at the start of organism_name, ignoring capitalization."}</p>
+        <p className="text-[11px] text-fg-subtle">{searchMode === "bioproject" ? "Find a keyword or exact phrase in BioProject titles or descriptions, ignoring capitalization. Add organism_name filters to narrow by organism." : searchMode === "keyword" ? "Find a keyword or phrase anywhere in organism_name, ignoring capitalization." : "Match complete genus/species words at the start of organism_name, ignoring capitalization."}</p>
+        {schema?.columns.includes("bioproject_description") && <p className="text-[11px] text-fg-subtle">BioProject text describes the study and may be unavailable for some records.</p>}
         {schema && <FilterEditor schema={schema} filters={filters} onChange={setFilters} disabled={busy || exporting} />}
         {HAS_BACKEND && !schema && !schemaError && <p className="text-xs text-fg-muted" role="status">Loading filter columns…</p>}
         {schemaError && <div className="text-xs text-danger" role="alert">{schemaError} <button className="btn-ghost" onClick={() => setSchemaRetry(x => x + 1)}>Retry</button></div>}
@@ -110,7 +115,7 @@ export function SearchView() {
     {result && active && <section className="panel" aria-busy={busy}>
       <div className="panel-hd flex flex-wrap items-center gap-3">
         <div className="mr-auto"><h2 className="text-sm font-semibold" aria-live="polite">{result.total.toLocaleString()} assemblies matched</h2>
-          <p className="text-xs text-fg-muted">Results for <span className="italic">{active.query}</span> · {active.search_mode === "keyword" ? "keyword" : "genus/species"} search · {active.filters.length} active filter{active.filters.length === 1 ? "" : "s"}</p>
+          <p className="text-xs text-fg-muted">Results for <span className="italic">{active.query}</span> · {active.search_mode === "bioproject" ? "BioProject text" : active.search_mode === "keyword" ? "organism keyword" : "genus/species"} search · {active.filters.length} active filter{active.filters.length === 1 ? "" : "s"}</p>
         </div>
         <button className="btn-ghost" disabled={busy || exporting || result.rows.length === 0} onClick={() => downloadPage(result, active.query)}><Download size={14} /> Download page</button>
         <button className="btn-ghost" disabled={busy || exporting || result.total === 0} onClick={exportAll}>{exporting ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />} Download all matches</button>
@@ -122,7 +127,7 @@ export function SearchView() {
           <ResultsTable result={result} />
           {pageNavigation("bottom")}
         </>}
-        <p className="text-[11px] text-fg-subtle">Downloads include every source column. Full downloads have a size limit; individual pages remain downloadable.</p>
+        <p className="text-[11px] text-fg-subtle">Downloads include every available column and full BioProject text when present. Full downloads have a size limit; individual pages remain downloadable.</p>
       </div>
     </section>}
   </div>;
