@@ -49,6 +49,12 @@ browse every matching record in pages. Genome sequences are not downloaded.
 
 ## Fast indexed searches
 
+To periodically update assemblies and BioProject metadata on TheBelly, run
+`scripts/refresh_assemblies.py`. It downloads fresh NCBI summaries, rebuilds
+all indexes, uploads a new immutable dataset, and optionally switches the
+existing Lambda while preserving unrelated configuration. See
+[REFRESH_DATA.md](REFRESH_DATA.md) for commands, activation, retries, and rollback.
+
 The preprocessor groups records by their first casefolded `organism_name`
 word (usually genus) and subdivides large groups into bounded chunks. A
 manifest records the schema, chunk paths, counts, and common categorical
