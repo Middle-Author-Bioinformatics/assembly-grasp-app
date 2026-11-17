@@ -5,6 +5,10 @@ Lambda, then deploy the frontend. The original S3 object is never modified.
 No database server, pandas, extra conda environment, or Python package is
 needed for preprocessing; Python 3.8+ is sufficient.
 
+For routine full refreshes after initial setup, use the automated workflow in
+[REFRESH_DATA.md](REFRESH_DATA.md). It rebuilds assemblies, BioProject enrichment,
+and keyword indexes together, with optional activation of a fresh S3 prefix.
+
 ## 1. Prepare the data on TheBelly
 
 From the repository root (or use the downloaded standalone script):
