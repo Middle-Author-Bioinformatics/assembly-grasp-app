@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import type { ExportProgress } from "../lib/export-pages";
 import { HAS_BACKEND, queryAssemblies, loadSchema, downloadAll, downloadPage,
   type AssemblyFilter, type AssemblySchema, type QueryResult, type SearchRequest, type SearchMode } from "../lib/assembly-config";
 import { ResultsTable } from "./ResultsTable";
@@ -18,8 +19,12 @@ export function SearchView() {
   const [active, setActive] = useState<SearchRequest | null>(null);
   const [busy, setBusy] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [exportProgress, setExportProgress] = useState<ExportProgress | null>(null);
+  const [exportMessage, setExportMessage] = useState("");
+  const exportController = useRef<AbortController | null>(null);
   const [error, setError] = useState("");
   const [pageInput, setPageInput] = useState("1");
+  useEffect(() => () => exportController.current?.abort(), []);
   useEffect(() => {
     if (!HAS_BACKEND) return;
     let cancelled = false;
@@ -37,7 +42,7 @@ export function SearchView() {
     modeAvailable &&
     !!query.trim() && query.length <= 200 && !/[\t\r\n]/.test(query);
   async function execute(search: SearchRequest) {
-    setBusy(true); setError("");
+    setBusy(true); setError(""); setExportMessage("");
     try {
       const next = await queryAssemblies(search);
       setResult(next); setActive({ ...search, dataset_id: next.dataset_id }); setPageInput(String(next.page));
@@ -51,10 +56,21 @@ export function SearchView() {
     if (active && result && !busy && !exporting && Number.isInteger(page) && page >= 1 && page <= result.pages) execute({ ...active, page });
   }
   async function exportAll() {
-    if (!active || exporting || busy) return;
-    setExporting(true); setError("");
-    try { await downloadAll(active); } catch (e: any) { setError(e.message || String(e)); }
-    finally { setExporting(false); }
+    if (!active || !result || exporting || busy) return;
+    const controller = new AbortController();
+    exportController.current = controller;
+    setExporting(true); setError(""); setExportMessage("");
+    setExportProgress({ completed: 0, total: result.total });
+    try {
+      await downloadAll(active, result, { signal: controller.signal, onProgress: setExportProgress });
+      setExportMessage(`Prepared all ${result.total.toLocaleString()} matches for download.`);
+    } catch (e: any) {
+      if (controller.signal.aborted) setExportMessage("Download cancelled. No file was saved.");
+      else setError(e.message || String(e));
+    } finally {
+      exportController.current = null;
+      setExporting(false); setExportProgress(null);
+    }
   }
   function pageNavigation(position: "top" | "bottom") {
     if (!result) return null;
@@ -117,17 +133,23 @@ export function SearchView() {
         <div className="mr-auto"><h2 className="text-sm font-semibold" aria-live="polite">{result.total.toLocaleString()} assemblies matched</h2>
           <p className="text-xs text-fg-muted">Results for <span className="italic">{active.query}</span> · {active.search_mode === "bioproject" ? "BioProject text" : active.search_mode === "keyword" ? "organism keyword" : "genus/species"} search · {active.filters.length} active filter{active.filters.length === 1 ? "" : "s"}</p>
         </div>
-        <button className="btn-ghost" disabled={busy || exporting || result.rows.length === 0} onClick={() => downloadPage(result, active.query)}><Download size={14} /> Download page</button>
-        <button className="btn-ghost" disabled={busy || exporting || result.total === 0} onClick={exportAll}>{exporting ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />} Download all matches</button>
+        <button className="btn-ghost" disabled={busy || exporting || result.rows.length === 0} onClick={() => downloadPage(result, active.query)}><Download size={14} /> Download this page ({result.rows.length.toLocaleString()})</button>
+        <button className="btn-ghost" disabled={busy || exporting || result.total === 0} onClick={exportAll}>{exporting ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />} {exporting ? "Preparing download…" : `Download all ${result.total.toLocaleString()} matches`}</button>
       </div>
       <div className="panel-bd space-y-4">
+        {exporting && exportProgress && <div className="space-y-2 text-xs" role="status" aria-live="polite">
+          <div className="flex flex-wrap items-center gap-3"><span>Preparing {exportProgress.completed.toLocaleString()} of {exportProgress.total.toLocaleString()} matches. Keep this tab open.</span>
+            <button className="btn-ghost" onClick={() => exportController.current?.abort()}>Cancel download</button></div>
+          <progress className="w-full" aria-label="Download preparation" value={exportProgress.completed} max={Math.max(1, exportProgress.total)} />
+        </div>}
+        {exportMessage && <p className="text-xs text-fg-muted" role="status">{exportMessage}</p>}
         {result.total === 0 ? <p className="text-sm text-fg-muted">No assemblies match this search and its filters.</p> : <>
           <div className="text-xs text-fg-muted" role="status">{busy ? "Loading results…" : `Showing ${((result.page - 1) * result.page_size + 1).toLocaleString()}–${Math.min(result.page * result.page_size, result.total).toLocaleString()} of ${result.total.toLocaleString()}`}</div>
           {pageNavigation("top")}
           <ResultsTable result={result} />
           {pageNavigation("bottom")}
         </>}
-        <p className="text-[11px] text-fg-subtle">Downloads include every available column and full BioProject text when present. Full downloads have a size limit; individual pages remain downloadable.</p>
+        <p className="text-[11px] text-fg-subtle">Results per page controls the table only. Download all includes every matching record across all pages, every available column, and full BioProject text when present.</p>
       </div>
     </section>}
   </div>;

@@ -28,8 +28,11 @@ browse every matching record in pages. Genome sequences are not downloaded.
   be changed independently of filtering and downloads.
 - `Group` is shown next to the organism name so source categories such as viral
   records are visible without scrolling to the end of the table.
-- Download the current page with every source column, or download all filtered
-  matches as one TSV (subject to the configured response-size cap).
+- Download the current page, or download **all filtered matches** as one TSV,
+  including every available column and complete BioProject text. The all-match
+  download automatically collects every page when the full response is too
+  large, with progress and cancellation. The table's 25/50/100 setting never
+  limits the total download. Keep the tab open while it prepares the file.
 - The source remains a snapshot supplied by the owner; no automatic NCBI
   refresh or BioSample/assembly deduplication is performed.
 
@@ -78,6 +81,10 @@ python3 -m unittest discover -s tests -v
 
 From `frontend/`, `npm run build` runs TypeScript checks and creates the static
 production build. Amplify builds only the frontend; Lambda is deployed separately.
+`npm run test:exports` checks complete downloads, including files larger than
+5 MB, more than 100 records, preserved duplicates, cancellation, and dataset
+consistency. The complete-download frontend update needs no Lambda or AWS
+configuration changes; it uses the existing JSON pagination API.
 
 ## API examples
 

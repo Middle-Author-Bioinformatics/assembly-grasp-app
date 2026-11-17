@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "test:exports": "node --test tests/export-pages.test.mjs",
     "preview": "vite preview --host 0.0.0.0 --port 4173"
   },
   "dependencies": {
@@ -25,3 +26,4 @@
     "vite": "^5.4.8"
   }
 }
+

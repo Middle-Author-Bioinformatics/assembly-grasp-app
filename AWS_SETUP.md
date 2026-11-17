@@ -173,6 +173,39 @@ curl -sS YOUR_FUNCTION_URL \
 Check `indexed` is true, `columns` matches the source, totals look correct,
 and page 2 continues with different records. Then test filters in the UI.
 
+## Complete downloads from the dashboard
+
+**Download all N matches** exports the complete active search, regardless of
+the displayed page or the table's 25/50/100 setting. **Download this page (N)**
+exports only the visible page. Both include every available column and full
+BioProject text, independent of selected table columns.
+
+The frontend retains a single TSV request for small exports. For likely large
+exports, or after a full request returns 413/503/504, it fetches every JSON
+page sequentially and combines them into one TSV with one header. An incomplete
+successful TSV response is also detected and replaced by complete page
+collection. Page size is reduced automatically if a wide JSON page exceeds
+the response limit. The active query, search mode, filters, dataset UUID,
+column schema, total count, and expected page length are preserved/validated;
+a changed or failed request cannot produce a partial download. Duplicate
+source assembly rows remain present.
+
+Users see the completed/total record count and can cancel, including the
+in-flight request. Keep the tab open until preparation finishes. This update
+is frontend-only: merge/deploy through Amplify; the existing Lambda, indexes,
+permissions, and environment variables do not need changes.
+
+There is no fixed 100-row or 5-MB combined-export cap in the dashboard. The
+browser assembles the final file, so its available memory remains a practical
+limit for very large exports. Each API page still obeys the existing response
+limit; one individual row must fit. Each page is an API request; very broad
+filtered searches repeat the backend's exact-count scan and can take longer
+and cost more than a small export. This is not a background export job and
+does not write export objects to S3. Direct callers of `format: "tsv"` retain
+the server response-size cap.
+
+Run `npm run test:exports` from `frontend/` for automated download checks.
+
 ## Scope and performance
 
 - A nonempty organism-name or keyword query is required. Filters apply across every
@@ -182,10 +215,10 @@ and page 2 continues with different records. Then test filters in the UI.
   group for exact totals on each request; large groups can still be slower.
 - The complete match set is not sent to the browser at once. Every record is
   reachable through pages even when the aggregate result exceeds 5 MB.
-- Full TSV downloads remain bounded by `MAX_RESULT_BYTES`; large exports must
-  be narrowed or downloaded page by page. This change does not implement
-  asynchronous export to S3. Raising the cap above Lambda's buffered-response
-  limits is not a solution.
+- Direct API TSV responses remain bounded by `MAX_RESULT_BYTES`. The dashboard
+  handles larger complete downloads by collecting JSON pages as described
+  above. Raising the API cap above Lambda's buffered-response limits is not
+  needed for the complete-download button.
 - Column selection affects display only. Downloads include every source
   column, and no assemblies are deduplicated or quality-filtered implicitly.
 - Each manifest has a dataset UUID. Page/download requests pin that UUID;
@@ -256,7 +289,8 @@ Unfiltered keyword pages scan the local name catalog for exact totals, then
 retrieve only the assembly chunks containing the requested page's records.
 Keyword queries with additional column filters read all name-matching records
 to apply those filters before counting/paging, so very broad filtered searches
-can still take longer. Full TSV downloads retain the configured size limit.
+can still take longer. Direct TSV responses retain the configured size limit;
+the dashboard automatically collects pages for larger complete downloads.
 
 The schema API advertises `search_modes: ["name", "keyword"]` only when both
 index environment variables are configured. Until then, or with an older
@@ -374,8 +408,9 @@ new catalog's `index_bytes` in `keyword_index.json` and size Lambda ephemeral
 storage to fit it plus at least 256 MiB. The first keyword request per Lambda
 environment downloads the catalog; warm requests reuse it. Benchmark a cold
 query and a broad filtered query before rollout. Exact counts with additional
-metadata filters can still require reading many matching chunks; full exports
-retain the size cap. No full XML is downloaded by Lambda.
+metadata filters can still require reading many matching chunks. Direct TSV
+responses retain the size cap; the dashboard can collect larger exports from
+JSON pages. No full XML is downloaded by Lambda.
 
 Smoke tests (replace `YOUR_FUNCTION_URL`):
 
