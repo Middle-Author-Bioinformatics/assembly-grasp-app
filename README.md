@@ -119,3 +119,7 @@ the original TSV API, including GET `?query=Geobacter`.
 
 © 2026 Middle Author Bioinformatics · For research and educational use only.
 
+
+## Assembly Grasp → GToTree integration
+
+See [GTOTREE_INTEGRATION.md](GTOTREE_INTEGRATION.md) for the coordinated rollout, configuration, and validation.

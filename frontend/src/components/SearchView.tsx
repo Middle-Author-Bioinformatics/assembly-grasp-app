@@ -2,12 +2,26 @@ import { useEffect, useRef, useState } from "react";
 import type { ExportProgress } from "../lib/export-pages";
 import { HAS_BACKEND, queryAssemblies, loadSchema, downloadAll, downloadPage,
   type AssemblyFilter, type AssemblySchema, type QueryResult, type SearchRequest, type SearchMode } from "../lib/assembly-config";
+import { GenomeTray } from "./GenomeTray";
+import { addReferences, recordFromRow, parseSelection, newSelection } from "../lib/genome-selection";
 import { ResultsTable } from "./ResultsTable";
 import { FilterEditor } from "./FilterEditor";
 import { Search, Loader2, Download, AlertCircle, Dna } from "lucide-react";
 const EXAMPLES = ["Geobacter", "Geobacter sulfurreducens", "Drosophila melanogaster", "Homo sapiens"];
 
 export function SearchView() {
+  const [genomes,setGenomes] = useState<Record<string,string>[]>(() => {
+    try { const saved=localStorage.getItem("mab-assembly-selection-v1");return saved?parseSelection(saved).genomes:[]; } catch {return [];}
+  });
+  const [selectionMessage,setSelectionMessage] = useState("");
+  useEffect(()=>{try {if(genomes.length)localStorage.setItem("mab-assembly-selection-v1",JSON.stringify(newSelection(genomes)));else localStorage.removeItem("mab-assembly-selection-v1");}catch{setSelectionMessage("Browser storage is unavailable. Your selection is kept in this tab; download it before leaving.");}},[genomes]);
+  function selectRows(rows:string[][],remove=false){
+    if(!result)return;
+    const records=rows.map(row=>recordFromRow(result.columns,row,result.dataset_id)).filter((r):r is Record<string,string>=>r!==null);
+    try {setGenomes(remove?genomes.filter(g=>!records.some(r=>r.assembly_accession===g.assembly_accession)):addReferences(genomes,records));setSelectionMessage("");}
+    catch(e){setSelectionMessage(e instanceof Error?e.message:String(e));}
+  }
+  function toggleRow(row:string[]){if(!result)return;const record=recordFromRow(result.columns,row,result.dataset_id);if(record)selectRows([row],genomes.some(g=>g.assembly_accession===record.assembly_accession));}
   const [query, setQuery] = useState("");
   const [searchMode, setSearchMode] = useState<SearchMode>("name");
   const [filters, setFilters] = useState<AssemblyFilter[]>([]);
@@ -127,6 +141,8 @@ export function SearchView() {
         </label>
       </div>
     </section>
+    <GenomeTray genomes={genomes} onRemove={id=>setGenomes(genomes.filter(g=>g.assembly_accession!==id))} onClear={()=>setGenomes([])} />
+    {selectionMessage&&<p className="text-sm text-warn" role="status">{selectionMessage}</p>}
     {error && <section className="panel border-danger/40" role="alert"><div className="panel-bd flex gap-3 text-sm text-danger"><AlertCircle size={18} className="shrink-0" />{error}</div></section>}
     {result && active && <section className="panel" aria-busy={busy}>
       <div className="panel-hd flex flex-wrap items-center gap-3">
@@ -146,7 +162,8 @@ export function SearchView() {
         {result.total === 0 ? <p className="text-sm text-fg-muted">No assemblies match this search and its filters.</p> : <>
           <div className="text-xs text-fg-muted" role="status">{busy ? "Loading results…" : `Showing ${((result.page - 1) * result.page_size + 1).toLocaleString()}–${Math.min(result.page * result.page_size, result.total).toLocaleString()} of ${result.total.toLocaleString()}`}</div>
           {pageNavigation("top")}
-          <ResultsTable result={result} />
+          <div className="flex flex-wrap gap-2"><button className="btn-ghost" disabled={busy} onClick={()=>selectRows(result.rows)}>Select this page</button><button className="btn-ghost" disabled={busy} onClick={()=>selectRows(result.rows,true)}>Deselect this page</button></div>
+          <ResultsTable result={result} selectedIds={new Set(genomes.map(g=>g.assembly_accession))} onToggle={toggleRow} disabled={busy} />
           {pageNavigation("bottom")}
         </>}
         <p className="text-[11px] text-fg-subtle">Results per page controls the table only. Download all includes every matching record across all pages, every available column, and full BioProject text when present.</p>
