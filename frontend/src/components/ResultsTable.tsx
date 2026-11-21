@@ -38,7 +38,9 @@ function cellValue(column: string, value: string | undefined) {
   );
 }
 
-export function ResultsTable({ result }: { result: QueryResult }) {
+export function ResultsTable({ result, selectedIds, onToggle, disabled = false }: {
+  result: QueryResult; selectedIds: Set<string>; onToggle: (row: string[]) => void; disabled?: boolean;
+}) {
   const [selection, setSelection] = useState<string[] | null>(null);
   const columns = result.columns;
   const selected = selection ?? DEFAULT_COLUMNS.filter(c => columns.includes(c));
@@ -62,10 +64,14 @@ export function ResultsTable({ result }: { result: QueryResult }) {
     </details>
     <div className="overflow-x-auto rounded-lg border border-border" role="region" aria-label="Assembly results" tabIndex={0}>
       <table className="w-full text-xs border-collapse">
-        <thead><tr className="bg-surface-2 text-fg-muted">{shown.map(c =>
+        <thead><tr className="bg-surface-2 text-fg-muted"><th scope="col" className="px-3 py-2 text-left">Select</th>{shown.map(c =>
           <th key={c.name} scope="col" className="text-left font-medium px-3 py-2 whitespace-nowrap border-b border-border">{({ group: "Group", bioproject_title: "BioProject title", bioproject_description: "BioProject description" } as Record<string, string>)[c.name] ?? c.name}</th>
         )}</tr></thead>
         <tbody>{result.rows.map((row, i) => <tr key={i} className="odd:bg-surface even:bg-surface-2/40">
+          <td className="px-3 py-2"><input type="checkbox" aria-label={`Select ${row[columns.indexOf("assembly_accession")] || "assembly"}`}
+            checked={selectedIds.has((row[columns.indexOf("assembly_accession")] || "").toUpperCase())}
+            disabled={disabled || !/^GC[AF]_\d+(?:\.\d+)?$/i.test(row[columns.indexOf("assembly_accession")] || "")}
+            onChange={() => onToggle(row)} /></td>
           {shown.map(c => <td key={c.name} className={`px-3 py-1.5 align-top border-b border-border-soft ${c.name === "organism_name" ? "italic" : ""}`}>
             {cellValue(c.name, row[c.idx])}
           </td>)}
