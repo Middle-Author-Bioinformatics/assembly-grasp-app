@@ -78,7 +78,7 @@ export function ResultsTable({ result, selectedIds, onToggle, disabled = false }
         </tr>)}</tbody>
       </table>
     </div>
-    {shown.length === 0 && <p className="text-xs text-fg-muted">Select a column above to display the table.</p>}
+    {shown.length === 0 && <p className="text-xs text-fg-muted">No columns selected</p>}
   </div>;
 }
 
