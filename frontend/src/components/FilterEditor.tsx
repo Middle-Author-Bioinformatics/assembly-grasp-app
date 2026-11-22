@@ -11,7 +11,7 @@ export function FilterEditor({ schema, filters, onChange, disabled }: {
   }
   return <div className="space-y-3">
     <div className="flex flex-wrap items-center gap-3">
-      <span className="text-xs text-fg-muted">Filters · all conditions must match</span>
+      <span className="text-xs text-fg-muted">Filters (AND)</span>
       <button type="button" className="btn-ghost" disabled={disabled || filters.length >= 20}
         onClick={() => onChange([...filters, { column: schema.columns.includes("assembly_level") ? "assembly_level" : schema.columns[0], op: "eq", value: "" }])}>+ Add filter</button>
       {filters.length > 0 && <button type="button" className="btn-ghost" disabled={disabled} onClick={() => onChange([])}>Clear filters</button>}
@@ -34,6 +34,5 @@ export function FilterEditor({ schema, filters, onChange, disabled }: {
       <button type="button" className="btn-ghost" aria-label={`Remove filter ${i + 1}`} disabled={disabled}
         onClick={() => onChange(filters.filter((_, idx) => idx !== i))}>Remove</button>
     </div>)}
-    {filters.length > 0 && <p className="text-[11px] text-fg-subtle">Numeric values use the source table’s units. Missing values are excluded from numeric comparisons. Press Search &amp; view to apply changes.</p>}
   </div>;
 }

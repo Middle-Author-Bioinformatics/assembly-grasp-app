@@ -19,7 +19,7 @@ test('rendered selection persists across result pages, searches and remounts',as
   let root=createRoot(document.getElementById('root'));
   await act(async()=>{root.render(React.createElement(SearchView));await new Promise(r=>setTimeout(r,0));});
   const input=document.querySelector('input[aria-label="Organism name"]');
-  async function search(query){await act(async()=>{Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype,'value').set.call(input,query);input.dispatchEvent(new dom.window.Event('input',{bubbles:true}));});await act(async()=>{[...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='Search & view').click();await new Promise(r=>setTimeout(r,0));});}
+  async function search(query){await act(async()=>{Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype,'value').set.call(input,query);input.dispatchEvent(new dom.window.Event('input',{bubbles:true}));});await act(async()=>{[...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='Search').click();await new Promise(r=>setTimeout(r,0));});}
   await search('Geobacter');
   await act(async()=>document.querySelector('input[aria-label="Select GCF_000000001.1"]').click());
   assert.match(document.body.textContent,/1 \/ 100 reference genomes selected/);
