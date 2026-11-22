@@ -15,7 +15,8 @@ test('rendered selection persists across result pages, searches and remounts',as
   await build({entryPoints:[fileURLToPath(new URL('../src/components/SearchView.tsx',import.meta.url))],bundle:true,platform:'node',format:'esm',jsx:'automatic',packages:'external',outfile:directory+'/component.mjs',define:{'import.meta.env':JSON.stringify({VITE_AG_API_BASE:'https://api.example',VITE_GTOTREE_APP_URL:'https://tree.example'})},logLevel:'silent'});
   const {SearchView}=await import(pathToFileURL(directory+'/component.mjs').href);
   const columns=['assembly_accession','organism_name','biosample'];
-  globalThis.fetch=async(_url,options)=>{const req=JSON.parse(options.body);const result=req.operation==='schema'?{columns,facets:{},dataset_id:'v1',indexed:true}:{columns,rows:[[req.page===2?'GCF_000000002.1':'GCF_000000001.1',req.query,'SAMN1']],total:2,page:req.page,page_size:1,pages:2,dataset_id:'v1',indexed:true,scanned:2};return new Response(JSON.stringify(result),{headers:{'Content-Type':'application/json'}});};
+  const requests=[];
+  globalThis.fetch=async(_url,options)=>{const req=JSON.parse(options.body);requests.push(req);const result=req.operation==='schema'?{columns,facets:{},dataset_id:'v1',indexed:true,search_modes:['name','bioproject']}:{columns,rows:[[req.page===2?'GCF_000000002.1':'GCF_000000001.1',req.query,'SAMN1']],total:2,page:req.page,page_size:1,pages:2,dataset_id:'v1',indexed:true,scanned:2};return new Response(JSON.stringify(result),{headers:{'Content-Type':'application/json'}});};
   let root=createRoot(document.getElementById('root'));
   await act(async()=>{root.render(React.createElement(SearchView));await new Promise(r=>setTimeout(r,0));});
   const input=document.querySelector('input[aria-label="Organism name"]');
@@ -27,6 +28,14 @@ test('rendered selection persists across result pages, searches and remounts',as
   await act(async()=>document.querySelector('input[aria-label="Select GCF_000000002.1"]').click());
   assert.match(document.body.textContent,/2 \/ 100 reference genomes selected/);
   assert.match(document.body.textContent,/share a BioSample/);
+  await act(async()=>document.querySelector('input[value="bioproject"]').click());
+  const beforeExample=requests.length;
+  await act(async()=>[...document.querySelectorAll('[aria-label="Example bacteria"] button')].find(b=>b.textContent==='Pelobacter').click());
+  assert.equal(input.value,'Pelobacter');
+  assert.equal(document.querySelector('input[value="name"]').checked,true);
+  assert.equal(requests.length,beforeExample,'example fills the query without submitting a search');
+  assert.match(document.body.textContent,/2 \/ 100 reference genomes selected/);
+  assert.equal([...document.querySelectorAll('[aria-label="Example bacteria"] button')].some(b=>/Geobacter/i.test(b.textContent)),false);
   await search('Another genus');assert.match(document.body.textContent,/2 \/ 100 reference genomes selected/);
   assert.equal(JSON.parse(localStorage.getItem('mab-assembly-selection-v1')).genomes.length,2);
   await act(async()=>root.unmount());root=createRoot(document.getElementById('root'));

@@ -8,6 +8,9 @@ import { ResultsTable } from "./ResultsTable";
 import { FilterEditor } from "./FilterEditor";
 import { Loader2 } from "lucide-react";
 
+// NCBI assembly counts and verification details: EXAMPLE_TAXA.md.
+const EXAMPLE_TAXA = ["Pelobacter", "Thermincola", "Dehalogenimonas", "Desulfitobacterium", "Ferrimonas"];
+
 export function SearchView() {
   const [genomes,setGenomes] = useState<Record<string,string>[]>(() => {
     try { const saved=localStorage.getItem("mab-assembly-selection-v1");return saved?parseSelection(saved).genomes:[]; } catch {return [];}
@@ -117,6 +120,11 @@ export function SearchView() {
           <button type="button" className="btn-primary" disabled={!canSearch} onClick={newSearch}>
             {busy ? <><Loader2 size={16} className="animate-spin" /> Searching…</> : "Search"}
           </button>
+        </div>
+        <div role="group" aria-label="Example bacteria" className="flex flex-wrap gap-2 text-xs">
+          {EXAMPLE_TAXA.map(taxon => <button key={taxon} type="button" disabled={busy || exporting}
+            className="pill border-border bg-surface-2 text-fg-muted italic"
+            onClick={() => { setQuery(taxon); setSearchMode("name"); }}>{taxon}</button>)}
         </div>
         {schema && <FilterEditor schema={schema} filters={filters} onChange={setFilters} disabled={busy || exporting} />}
         {HAS_BACKEND && !schema && !schemaError && <p className="text-xs text-fg-muted" role="status">Loading filter columns…</p>}
