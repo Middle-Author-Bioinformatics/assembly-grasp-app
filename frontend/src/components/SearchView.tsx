@@ -107,7 +107,7 @@ export function SearchView() {
       </nav>
     );
   }
-  return <div className="space-y-6 animate-fade-in">
+  return <div className="genome-search space-y-6 animate-fade-in">
     <h1 className="sr-only">TaxonSlueth</h1>
     <section className="panel">
       <div className="panel-hd"><h2 className="text-sm font-semibold">Assemblies</h2></div>

@@ -8,11 +8,13 @@ This milestone connects the existing TaxonSlueth and GToTree deployments; no new
 2. Deploy `gtotree-app` with `VITE_ASSEMBLY_GRASP_ORIGINS` set to the exact HTTPS origin of this app. Multiple custom/Amplify origins may be comma-separated. Do not use `*`.
 3. Set `VITE_GTOTREE_APP_URL` in this existing TaxonSlueth Amplify app to the existing GToTree HTTPS URL and redeploy.
 
-The **Build a phylogenomic tree** button opens GToTree, transfers the current selection, and lets the user add their own genomes before submission. The source, destination origin, window identity, and handshake nonce are checked. Genome metadata never appears in URLs. The `genome-selection.ts` v1 contract is mirrored in both repos and must stay compatible.
+The floating **Selected genomes** button opens a separate cart drawer. The cart lists selected genomes with individual Remove buttons, Clear selection, Download selection JSON and Build tree. Closing it preserves the current search, page and filters. Escape closes the dialog and returns focus to the cart button.
+
+The **Build tree** button in the cart opens GToTree, transfers the current selection, and lets the user add their own genomes before submission. The source, destination origin, window identity, and handshake nonce are checked. Genome metadata never appears in URLs. The `genome-selection.ts` v1 contract is mirrored in both repos and must stay compatible.
 
 If a popup is blocked, opener isolation is enabled, or the app origins are not configured, **Download selection JSON** remains available; use **Import selection JSON** in GToTree. Selection data is a list of public assembly metadata, not an authorization claim. No account or project access is granted by importing it.
 
-Only valid GCA/GCF records can be selected. Select-this-page is atomic: exceeding 100 produces a message and leaves the previous selection unchanged. Search/export filters do not clear the tray. The existing full-result exports remain independent of the tree-selection cap; users can still download every search match.
+Only valid GCA/GCF records can be selected. Select-this-page is atomic: exceeding 100 produces a message and leaves the previous selection unchanged. Search/export filters do not clear the cart. The existing full-result exports remain independent of the tree-selection cap; users can still download every search match.
 
 ## Tests
 
