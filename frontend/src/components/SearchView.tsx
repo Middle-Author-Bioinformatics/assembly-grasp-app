@@ -9,7 +9,11 @@ import { FilterEditor } from "./FilterEditor";
 import { Loader2 } from "lucide-react";
 
 // NCBI assembly counts and verification details: EXAMPLE_TAXA.md.
-const EXAMPLE_TAXA = ["Pelobacter", "Thermincola", "Dehalogenimonas", "Desulfitobacterium", "Ferrimonas"];
+const EXAMPLE_GROUPS = [
+  { rank: "Genera", names: ["Pelobacter", "Thermincola", "Dehalogenimonas", "Desulfitobacterium", "Ferrimonas", "Desulfuromonas", "Halorhodospira", "Roseiflexus"] },
+  { rank: "Species", names: ["Deinococcus radiodurans", "Bdellovibrio bacteriovorus", "Myxococcus xanthus", "Azotobacter vinelandii", "Cupriavidus metallidurans", "Chloroflexus aurantiacus", "Rhodospirillum rubrum", "Mariprofundus ferrooxydans"] },
+  { rank: "Strains", names: ["Deinococcus radiodurans R1", "Bdellovibrio bacteriovorus HD100", "Myxococcus xanthus DK 1622", "Azotobacter vinelandii DJ", "Cupriavidus metallidurans CH34", "Chloroflexus aurantiacus J-10-fl", "Rhodospirillum rubrum ATCC 11170", "Mariprofundus ferrooxydans PV-1"] },
+];
 
 export function SearchView() {
   const [genomes,setGenomes] = useState<Record<string,string>[]>(() => {
@@ -121,10 +125,15 @@ export function SearchView() {
             {busy ? <><Loader2 size={16} className="animate-spin" /> Searching…</> : "Search"}
           </button>
         </div>
-        <div role="group" aria-label="Example bacteria" className="flex flex-wrap gap-2 text-xs">
-          {EXAMPLE_TAXA.map(taxon => <button key={taxon} type="button" disabled={busy || exporting}
-            className="pill border-border bg-surface-2 text-fg-muted italic"
-            onClick={() => { setQuery(taxon); setSearchMode("name"); }}>{taxon}</button>)}
+        <div role="group" aria-label="Example bacteria" className="space-y-3">
+          {EXAMPLE_GROUPS.map(group => <div key={group.rank} role="group" aria-label={`${group.rank} examples`} className="flex flex-col gap-2 sm:flex-row sm:items-start">
+            <span className="w-16 shrink-0 text-xs text-fg-subtle sm:pt-1">{group.rank}</span>
+            <div className="flex flex-wrap gap-2 text-xs">
+              {group.names.map(taxon => <button key={taxon} type="button" disabled={busy || exporting}
+                className="pill border-border bg-surface-2 text-fg-muted italic"
+                onClick={() => { setQuery(taxon); setSearchMode("name"); }}>{taxon}</button>)}
+            </div>
+          </div>)}
         </div>
         {schema && <FilterEditor schema={schema} filters={filters} onChange={setFilters} disabled={busy || exporting} />}
         {HAS_BACKEND && !schema && !schemaError && <p className="text-xs text-fg-muted" role="status">Loading filter columns…</p>}
