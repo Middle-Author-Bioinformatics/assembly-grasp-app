@@ -104,7 +104,7 @@ export function SearchView() {
     );
   }
   return <div className="space-y-6 animate-fade-in">
-    <h1 className="sr-only">Assembly Grasp</h1>
+    <h1 className="sr-only">TaxonSlueth</h1>
     <section className="panel">
       <div className="panel-hd"><h2 className="text-sm font-semibold">Assemblies</h2></div>
       <div className="panel-bd space-y-4">

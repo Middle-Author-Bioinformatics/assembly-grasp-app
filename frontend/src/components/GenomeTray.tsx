@@ -8,7 +8,7 @@ export function GenomeTray({genomes,onRemove,onClear}: {genomes:Record<string,st
   useEffect(()=>()=>cleanup.current?.(),[]);
   const target=(import.meta.env.VITE_GTOTREE_APP_URL as string|undefined)||"";
   const repeats=sameBioSample(genomes);
-  function download(){const url=URL.createObjectURL(new Blob([JSON.stringify(newSelection(genomes),null,2)],{type:"application/json"}));const a=document.createElement("a");a.href=url;a.download="assembly-grasp-selection.json";a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
+  function download(){const url=URL.createObjectURL(new Blob([JSON.stringify(newSelection(genomes),null,2)],{type:"application/json"}));const a=document.createElement("a");a.href=url;a.download="taxonslueth-selection.json";a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
   function transfer(){try{cleanup.current?.();cleanup.current=handoffSelection(target,newSelection(genomes),setMessage);}catch(e){setMessage(e instanceof Error?e.message:String(e));}}
   return <section className="panel genome-tray" aria-label="Selected reference genomes">
     <div className="panel-hd flex flex-wrap items-center gap-3"><div className="mr-auto"><h2 className="text-base font-semibold">{genomes.length} / {MAX_REFERENCES} reference genomes selected</h2></div>
