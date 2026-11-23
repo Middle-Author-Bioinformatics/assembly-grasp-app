@@ -1,12 +1,12 @@
 # Select references → build a GToTree report
 
-This milestone connects the existing Assembly Grasp and GToTree deployments; no new Amplify app is needed. The source and report interfaces use the same MAB teal light/dark palette. Public genome selections persist in browser storage across searches, result pages, and refreshes. Exact assembly accessions are deduplicated, capped at 100, and retain their version suffixes and dataset provenance. Possible same-BioSample counterparts are flagged for review, not silently removed.
+This milestone connects the existing TaxonSlueth and GToTree deployments; no new Amplify app is needed. The source and report interfaces use the same MAB teal light/dark palette. Public genome selections persist in browser storage across searches, result pages, and refreshes. Exact assembly accessions are deduplicated, capped at 100, and retain their version suffixes and dataset provenance. Possible same-BioSample counterparts are flagged for review, not silently removed.
 
 ## Deploy
 
 1. Merge/deploy the coordinated `gtotree-local` backend changes first (worker limits, reference metadata, updated report generator).
 2. Deploy `gtotree-app` with `VITE_ASSEMBLY_GRASP_ORIGINS` set to the exact HTTPS origin of this app. Multiple custom/Amplify origins may be comma-separated. Do not use `*`.
-3. Set `VITE_GTOTREE_APP_URL` in this existing Assembly Grasp Amplify app to the existing GToTree HTTPS URL and redeploy.
+3. Set `VITE_GTOTREE_APP_URL` in this existing TaxonSlueth Amplify app to the existing GToTree HTTPS URL and redeploy.
 
 The **Build a phylogenomic tree** button opens GToTree, transfers the current selection, and lets the user add their own genomes before submission. The source, destination origin, window identity, and handshake nonce are checked. Genome metadata never appears in URLs. The `genome-selection.ts` v1 contract is mirrored in both repos and must stay compatible.
 

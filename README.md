@@ -1,4 +1,6 @@
-# Assembly Grasp
+# TaxonSlueth
+
+Formerly Assembly Grasp. The repository name, deployment settings, saved-selection keys and v1 transfer identifiers retain their existing names for compatibility.
 
 Search NCBI genome assembly metadata by organism, filter source columns, and
 browse every matching record in pages. Genome sequences are not downloaded.
@@ -120,6 +122,6 @@ the original TSV API, including GET `?query=Geobacter`.
 © 2026 Middle Author Bioinformatics · For research and educational use only.
 
 
-## Assembly Grasp → GToTree integration
+## TaxonSlueth → GToTree integration
 
 See [GTOTREE_INTEGRATION.md](GTOTREE_INTEGRATION.md) for the coordinated rollout, configuration, and validation.
