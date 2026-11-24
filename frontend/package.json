@@ -11,7 +11,7 @@
     "test:selection": "node --test tests/selection.test.mjs",
     "test:ui": "node --test tests/ui.test.mjs",
     "test:handoff": "node --test tests/handoff.test.mjs",
-    "test:accounts": "node --test tests/registration.test.mjs tests/profile-ui.test.mjs tests/protected-app.test.mjs tests/persistent-session.test.mjs tests/embedded-account-ui.test.mjs"
+    "test:accounts": "node --test tests/registration.test.mjs tests/profile-ui.test.mjs tests/protected-app.test.mjs tests/persistent-session.test.mjs tests/embedded-account-ui.test.mjs tests/account-popup.test.mjs"
   },
   "dependencies": {
     "clsx": "^2.1.1",
@@ -32,3 +32,4 @@
     "vite": "^5.4.8"
   }
 }
+
