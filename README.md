@@ -125,3 +125,8 @@ the original TSV API, including GET `?query=Geobacter`.
 ## TaxonSlueth → GToTree integration
 
 See [GTOTREE_INTEGRATION.md](GTOTREE_INTEGRATION.md) for the coordinated rollout, configuration, and validation.
+
+
+## MAB accounts
+
+See [MAB_ACCOUNTS.md](MAB_ACCOUNTS.md) for the coordinated shared-account rollout.

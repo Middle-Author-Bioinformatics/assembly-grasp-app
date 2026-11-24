@@ -1,10 +1,12 @@
+import {ACCOUNT_ENABLED} from "./account-config";
+import {accountFetch} from "./account-api";
 import { collectAllPages, isCompleteTsv, type ExportOptions, type ExportSnapshot } from "./export-pages";
 const env = import.meta.env;
 export const AG_CONFIG = {
   apiBase: (env.VITE_AG_API_BASE as string | undefined)?.replace(/\/+$/, "") || "",
   bucket: (env.VITE_AG_BUCKET as string | undefined) || "assembly-grasp-bucket",
 };
-export const HAS_BACKEND = AG_CONFIG.apiBase !== "";
+export const HAS_BACKEND = ACCOUNT_ENABLED || AG_CONFIG.apiBase !== "";
 export type SearchMode = "name" | "keyword" | "bioproject";
 export type FilterOp = "eq" | "ne" | "contains" | "gte" | "lte" | "missing" | "present";
 export interface AssemblyFilter { column: string; op: FilterOp; value: string }
@@ -27,7 +29,7 @@ async function request(payload: object, signal?: AbortSignal): Promise<Response>
   if (!HAS_BACKEND) throw new QueryError("No search service configured.", 0);
   let res: Response;
   try {
-    res = await fetch(AG_CONFIG.apiBase, { method: "POST",
+    res = await (ACCOUNT_ENABLED?accountFetch:fetch)(ACCOUNT_ENABLED?"/apps/taxonsleuth/search":AG_CONFIG.apiBase, { method: "POST",
       headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload), signal });
   } catch (error) {
     if (signal?.aborted) throw new DOMException("Download cancelled", "AbortError");
@@ -111,4 +113,5 @@ export function downloadPage(result: QueryResult, query: string): void {
   const lines = ["#" + result.columns.join("\t"), ...result.rows.map(row => row.join("\t"))];
   downloadTsv(lines.join("\n") + "\n", downloadFilename(query).replace(/\.tsv$/, `-page-${result.page}.tsv`));
 }
+
 

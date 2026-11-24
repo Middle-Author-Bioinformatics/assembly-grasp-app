@@ -1,8 +1,10 @@
+import {ACCOUNT_ENABLED} from "./lib/account-config";
+import {AccountProvider,AccountGate} from "./components/Account";
 import { Header } from "./components/Header";
 import { SearchView } from "./components/SearchView";
 import { HAS_BACKEND } from "./lib/assembly-config";
 
-export default function App() {
+function Workspace() {
   return (
     <div className="min-h-full relative z-10">
       <Header onTitleClick={() => window.scrollTo({ top: 0, behavior: "smooth" })} />
@@ -21,3 +23,6 @@ export default function App() {
     </div>
   );
 }
+
+
+export default function App(){return ACCOUNT_ENABLED?<AccountProvider><AccountGate header={<Header/>}><Workspace/></AccountGate></AccountProvider>:<Workspace/>;}

@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { test, afterEach } from "node:test";
 import ts from "typescript";
+import {build} from "esbuild";
+import {fileURLToPath} from "node:url";
 
 // Compile the actual client modules using an existing development dependency.
 // No browser server, network calls, or additional test packages are needed.
@@ -13,10 +15,8 @@ function moduleUrl(source) {
 }
 const pagesUrl = moduleUrl(await readFile(new URL("../src/lib/export-pages.ts", import.meta.url), "utf8"));
 const { collectAllPages, isCompleteTsv } = await import(pagesUrl);
-const configSource = (await readFile(new URL("../src/lib/assembly-config.ts", import.meta.url), "utf8"))
-  .replace('from "./export-pages"', `from "${pagesUrl}"`)
-  .replace("const env = import.meta.env;", 'const env = { VITE_AG_API_BASE: "https://assembly-grasp.test" };');
-const { downloadAll } = await import(moduleUrl(configSource));
+const configBuild=await build({entryPoints:[fileURLToPath(new URL('../src/lib/assembly-config.ts',import.meta.url))],bundle:true,format:'esm',platform:'node',write:false,define:{'import.meta.env':JSON.stringify({VITE_AG_API_BASE:'https://assembly-grasp.test'})},logLevel:'silent'});
+const {downloadAll}=await import('data:text/javascript;base64,'+Buffer.from(configBuild.outputFiles[0].text).toString('base64'));
 
 const originals = { fetch: globalThis.fetch, document: globalThis.document,
   create: URL.createObjectURL, revoke: URL.revokeObjectURL, timeout: globalThis.setTimeout };
@@ -229,3 +229,4 @@ test("a single row that exceeds the response limit fails instead of silently tru
   }), /Row too large/);
   assert.deepEqual(sizes, [100, 50, 25, 5, 1]);
 });
+

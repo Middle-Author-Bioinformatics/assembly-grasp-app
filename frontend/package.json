@@ -10,13 +10,15 @@
     "preview": "vite preview --host 0.0.0.0 --port 4173",
     "test:selection": "node --test tests/selection.test.mjs",
     "test:ui": "node --test tests/ui.test.mjs",
-    "test:handoff": "node --test tests/handoff.test.mjs"
+    "test:handoff": "node --test tests/handoff.test.mjs",
+    "test:accounts": "node --test tests/registration.test.mjs tests/profile-ui.test.mjs tests/protected-app.test.mjs"
   },
   "dependencies": {
     "clsx": "^2.1.1",
     "lucide-react": "^0.453.0",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "oidc-client-ts": "^3.4.1"
   },
   "devDependencies": {
     "@types/react": "^18.3.11",
